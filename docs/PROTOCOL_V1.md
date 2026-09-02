@@ -162,6 +162,8 @@ The local agent keeps retry state only in RAM. If no positive durable acknowledg
 
 After a local restart, the agent may submit the current provider snapshot again. The server must deduplicate scheduling using stable event semantics such as linked user/device + provider + window kind + reset timestamp.
 
+Implementation note (P3): the idempotency/combine key is scoped to the **user**, not the device — `(user_id, provider, window_kind, reset_at)`. Two devices belonging to the same user reporting the same provider's same window produce one notification, not two, since the user only wants one Telegram message per real reset window regardless of which machine reported it.
+
 ## Scheduling
 
 Default reset-notification rule:

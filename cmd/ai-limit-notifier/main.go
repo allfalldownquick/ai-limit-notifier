@@ -26,6 +26,7 @@ import (
 	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/claude"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/codex"
+	"github.com/allfalldownquick/ai-limit-notifier/internal/sink"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/wrapper"
 )
 
@@ -380,7 +381,8 @@ func runMonitor(args []string) int {
 	fs := flag.NewFlagSet("monitor", flag.ContinueOnError)
 	codexInterval := fs.Duration("codex-interval", 5*time.Minute, "bounded Codex polling interval (clamped to a minimum)")
 	threshold := fs.Float64("threshold", domain.DefaultScheduleThreshold, "used_percent threshold that schedules a reset event")
-	dryRun := fs.Bool("dry-run", true, "show would-be events only; never treated as delivered to a real server (no server exists yet)")
+	dryRun := fs.Bool("dry-run", true, "show would-be events only; never send to a configured server")
+	serverURL := fs.String("server-url", "", "hosted/self-hosted server base URL (e.g. https://api.example.com); requires AI_LIMIT_NOTIFIER_DEVICE_TOKEN")
 	if err := fs.Parse(args); err != nil {
 		return 3
 	}
@@ -388,10 +390,31 @@ func runMonitor(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	sink := &printSink{w: os.Stdout, dryRun: *dryRun}
-	core := agent.NewCore(sink, *threshold)
+	var core *agent.Core
+	switch {
+	case *dryRun || *serverURL == "":
+		if *serverURL != "" {
+			fmt.Println("monitor: --dry-run set; ignoring --server-url and printing would-be events instead")
+		}
+		core = agent.NewCore(&printSink{w: os.Stdout, dryRun: true}, *threshold)
+		fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s dry-run=true\n", *threshold, *codexInterval)
+	default:
+		// Deliberately not a CLI flag: a bearer token must never appear in
+		// `ps`/shell history the way a flag value would.
+		token := os.Getenv("AI_LIMIT_NOTIFIER_DEVICE_TOKEN")
+		if token == "" {
+			fmt.Fprintln(os.Stderr, "monitor: --server-url given but AI_LIMIT_NOTIFIER_DEVICE_TOKEN is not set")
+			return 3
+		}
+		httpSink, err := sink.New(*serverURL, token)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "monitor: %v\n", err)
+			return 3
+		}
+		core = agent.NewCore(httpSink, *threshold)
+		fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s server=%s\n", *threshold, *codexInterval, *serverURL)
+	}
 
-	fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s dry-run=%v\n", *threshold, *codexInterval, *dryRun)
 	fmt.Println("monitor: local runtime persistence disabled; all state is in RAM")
 
 	var wg sync.WaitGroup
