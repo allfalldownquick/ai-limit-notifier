@@ -5,8 +5,12 @@ This document separates decisions that are already fixed from items that still n
 ## Closed decisions
 
 - `main` is the single active product branch unless explicitly changed later.
-- The project is open source and supports self-hosting.
+- Ordinary users do not install from a separate product/user branch; user distribution is through versioned GitHub Releases.
+- Beta/stable channels use release tags/prereleases rather than permanently divergent product branches.
+- The project is intended to be open source and supports self-hosting; a repository license still needs to be explicitly selected before public release.
 - The project-operated hosted mode uses a dedicated AI Limit Notifier Telegram bot and project-operated server infrastructure.
+- The hosted server is not a software-distribution authority: it must not push executable code, arbitrary download URLs to execute, shell commands, or remote configuration changes to local agents.
+- Official client binaries/installers come from official GitHub Releases or are built by the user from public source.
 - The initial hosted beta is free while the monitoring path is being validated.
 - Hosted billing is server-configurable and is not enforced by the local agent.
 - After the beta is stable, a symbolic recurring Telegram Stars price may start at `1 XTR` per 30 days if Telegram accepts that amount in the production subscription flow.
@@ -22,6 +26,7 @@ This document separates decisions that are already fixed from items that still n
 - Missing provider windows are treated as unknown, never as zero usage.
 - A user has one active Telegram delivery destination: private bot chat or configured channel.
 - AI-assisted installation is a first-class setup method, but it must inspect and present the installation plan before making changes.
+- The first beta does not use hosted-server-driven automatic executable updates. Unattended auto-update is deferred until release signing and rollback behavior are designed.
 
 ## Open technical validations
 
@@ -33,20 +38,26 @@ These are not product debates; they need implementation and real-environment pro
 - Determine the safe native-Windows Codex CLI / Codex desktop adapter and explicitly mark unsupported environments when no stable read-only interface exists.
 - Choose the WSL agent lifecycle so monitoring works reliably without unnecessarily keeping a WSL distro alive.
 - Implement and test the deterministic installer surface: `detect`, `install --plan`, `install`, `doctor`, `show-payload`, `status`, `uninstall --plan`, `uninstall`.
-- Implement strict hosted API authentication, replay protection, rate limiting, schema validation and device revocation.
+- Decide and implement static linked-device credential storage per platform (for example restrictive file permissions on WSL/Linux and an appropriate protected store on native Windows).
+- Implement strict hosted API authentication, idempotency/replay handling, rate limiting, schema validation and device revocation.
 - Implement durable server scheduling, SQLite persistence, Telegram rate-limited delivery and restart recovery.
-- Verify Telegram private-chat and channel binding, including safe channel ownership/permission verification.
+- Define Telegram delivery crash semantics; v0.1 should prefer safe at-least-once delivery with rare duplicate tolerance over silently losing reset notifications.
+- Verify Telegram private-chat binding first; channel binding and safe ownership/permission verification follow after the private path works.
+- Define bounded hosted-history retention and user deletion behavior before accepting broad public usage.
 - Verify Telegram Stars recurring billing in Telegram's test environment before enabling any production charge.
-- Add release checksums/signing strategy before promoting unattended automatic updates.
-- Add CI and complete security/code review before a stable release.
+- Build release artifacts for supported OS/architectures and publish checksums for the first public beta.
+- Add a release-signing strategy before promoting unattended automatic updates.
+- Extend CI/release automation and complete security/code review before a stable release.
 
-## Open product choices
+## Open product/legal choices
 
-These can be decided after the core path works.
+These do not block the provider-reader PoC, but must be closed before calling the public project/release complete.
 
-- How much usage/history the hosted service retains and for how long.
+- Select the repository software license. The repository should not claim a specific open-source license until the owner explicitly chooses it; AGPL-3.0 is one candidate for an open-source + hosted-service model.
+- Exact hosted usage/history retention period after observing what weekly analytics actually needs.
 - Whether weekly pacing is shown only on demand, sent on a schedule, or triggers warnings when usage gets materially ahead of pace.
 - Whether hosted beta users can link unlimited devices or whether a simple device cap is useful later.
 - Exact Free/Pro feature split after the free beta.
 - Final post-beta Stars price after observing real usage and infrastructure/support costs.
-- Whether sponsored messages are ever used; they are not required for the initial product.
+
+Advertising/sponsorship is intentionally out of scope until the core product is working and used in practice.
