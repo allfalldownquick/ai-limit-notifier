@@ -7,7 +7,12 @@ This document separates decisions that are already fixed from items that still n
 - `main` is the single active product branch unless explicitly changed later.
 - Ordinary users do not install from a separate product/user branch; user distribution is through versioned GitHub Releases.
 - Beta/stable channels use release tags/prereleases rather than permanently divergent product branches.
-- The project is intended to be open source and supports self-hosting; a repository license still needs to be explicitly selected before public release.
+- The repository is source-available under the PolyForm Shield License 1.0.0.
+- Ordinary personal use, self-hosting, modification, and non-competing internal company use are allowed under the public license.
+- Providing a competing product/service using the software requires separate permission from the copyright holder.
+- Company-specific licensing, support, or custom development may be negotiated individually in the future; no public commercial tariff is fixed now.
+- Because the license restricts competing use, the project should not be described as OSI-approved open source.
+- External contributions must not be merged in a way that prevents the copyright holder from offering separate permissions/company licenses later; a CLA or equivalent rights-grant process is required before substantial outside code is accepted.
 - The project-operated hosted mode uses a dedicated AI Limit Notifier Telegram bot and project-operated server infrastructure.
 - The hosted server is not a software-distribution authority: it must not push executable code, arbitrary download URLs to execute, shell commands, or remote configuration changes to local agents.
 - Official client binaries/installers come from official GitHub Releases or are built by the user from public source.
@@ -49,11 +54,10 @@ These are not product debates; they need implementation and real-environment pro
 - Add a release-signing strategy before promoting unattended automatic updates.
 - Extend CI/release automation and complete security/code review before a stable release.
 
-## Open product/legal choices
+## Open product choices
 
-These do not block the provider-reader PoC, but must be closed before calling the public project/release complete.
+These can be decided after the core path works.
 
-- Select the repository software license. The repository should not claim a specific open-source license until the owner explicitly chooses it; AGPL-3.0 is one candidate for an open-source + hosted-service model.
 - Exact hosted usage/history retention period after observing what weekly analytics actually needs.
 - Whether weekly pacing is shown only on demand, sent on a schedule, or triggers warnings when usage gets materially ahead of pace.
 - Whether hosted beta users can link unlimited devices or whether a simple device cap is useful later.
