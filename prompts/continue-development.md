@@ -2,6 +2,8 @@
 
 Copy the prompt below into a **new coding-agent session opened in the repository**.
 
+> If `docs/PROJECT_STATUS.md` still says P0 real-machine provider validation is incomplete, use [`validate-real-machine.md`](validate-real-machine.md) first. That prompt is stricter and is the canonical procedure for proving Claude Code/Codex readers on an actual machine.
+
 ```text
 Continue development of this repository as the implementation agent for AI Limit Notifier.
 
@@ -21,6 +23,8 @@ Read and inspect:
 - docs/RELEASE_CRITERIA.md
 - docs/INSTALLER_CONTRACT.md
 - docs/AI_ASSISTED_INSTALL.md
+- docs/DISTRIBUTION.md
+- docs/PROTOCOL_V1.md
 - the current Go source and tests
 
 Then inspect the repository state and run the existing tests/checks that are possible in this environment.
@@ -31,6 +35,8 @@ Before coding, give me a short report containing:
 3. the first incomplete priority from docs/PROJECT_STATUS.md;
 4. any contradiction you found between code and documented security/product decisions;
 5. exactly what you propose to implement next and how you will verify it.
+
+If P0 real-machine validation is still incomplete, STOP normal implementation planning and follow `prompts/validate-real-machine.md` as the canonical validation procedure before writing production provider adapters.
 
 Do not reopen settled product decisions unless real implementation evidence proves one is impossible or unsafe.
 
