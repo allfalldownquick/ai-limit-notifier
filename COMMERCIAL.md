@@ -1,34 +1,27 @@
-# Commercial Licensing
+# Commercial Licensing and Company Use
 
-AI Limit Notifier is available under the **PolyForm Noncommercial License 1.0.0** for permitted noncommercial use.
+AI Limit Notifier is distributed under the **PolyForm Shield License 1.0.0**.
 
-Commercial use requires a separate commercial license from the project owner.
+Ordinary use is allowed, including personal use, self-hosting, modification, and use inside a company, as long as the use complies with the public license and is not used to provide a competing product or service.
 
-## Commercial use
+If a company wants rights outside the public license — for example to build, redistribute, white-label, embed, or offer a product/service that would compete with AI Limit Notifier — it can request a separate license from the copyright holder.
 
-If you want to use AI Limit Notifier for a company, paid service, SaaS, redistribution, embedding, white-labeling, or another commercial purpose, contact the project owner for a commercial license.
+There is no fixed public commercial price or tariff. Any separate permission, commercial license, support arrangement, custom development, or company-specific feature work is handled individually.
 
-**Commercial licensing is offered individually.** There is no fixed public price or standard plan at this stage. Terms and pricing are discussed based on the intended use.
-
-When contacting us, briefly describe:
-
-- who will use the software;
-- how you plan to use it;
-- whether it is internal use, SaaS/hosting, redistribution, or integration into another product;
-- approximate scale if relevant.
+A company can also contact the project simply to request custom functionality even when its existing use is already allowed by the public license. Paid custom development and software licensing are separate things.
 
 ## Contact
 
-A dedicated private licensing email will be published before the broad public release.
+A dedicated private contact address can be added before broad public release.
 
-Until then, a company may open a GitHub issue titled `Commercial licensing inquiry` and ask for a private contact method. Do not post confidential business information, contracts, billing details, credentials, or personal data in a public issue.
+Until then, a company may open a GitHub issue titled `Commercial / company inquiry` without posting confidential information and ask the repository owner for a private contact method.
 
-## Hosted service vs software license
+Do not post contracts, credentials, billing information, personal data, internal architecture, or other confidential business information in a public issue.
 
-A subscription to the project-operated hosted notification service and a commercial software license are separate unless the applicable hosted-service terms explicitly state otherwise.
+## Contributions and future licensing
 
-## License model
+The project owner intends to preserve the ability to offer separate permissions and company-specific licenses in the future. External code contributions therefore require a contribution process that grants the project owner sufficient rights to continue licensing the combined work.
 
-Because the public license restricts commercial use, AI Limit Notifier should be described as **source-available**, not OSI-approved open source.
+Until that process/CLA is explicitly in place, substantial external code contributions should not be merged merely because a pull request is technically acceptable.
 
-See `LICENSE` for the public license terms. This page is only a practical overview; a commercial license is granted through a separate agreement with the project owner.
+This page is a practical overview. The `LICENSE` file is the controlling public software license; any separate company rights require an explicit agreement from the copyright holder.
