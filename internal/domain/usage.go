@@ -29,9 +29,9 @@ type UsageWindow struct {
 }
 
 type UsageSnapshot struct {
-	Provider Provider    `json:"provider"`
-	FiveHour UsageWindow `json:"five_hour"`
-	Weekly   UsageWindow `json:"weekly"`
+	Provider Provider     `json:"provider"`
+	FiveHour *UsageWindow `json:"five_hour,omitempty"`
+	Weekly   *UsageWindow `json:"weekly,omitempty"`
 }
 
 func NormalizeCodexLeft(leftPercent float64) float64 {
@@ -43,10 +43,36 @@ func NormalizeClaudeUsed(usedPercent float64) float64 {
 }
 
 func ShouldScheduleReset(usedPercent, threshold float64) bool {
-	if threshold <= 0 || threshold > 100 {
+	if threshold <= 0 || threshold > 100 || math.IsNaN(usedPercent) || math.IsInf(usedPercent, 0) {
 		return false
 	}
 	return usedPercent >= threshold
+}
+
+func (s UsageSnapshot) Validate(now time.Time) error {
+	if s.Provider != ProviderCodex && s.Provider != ProviderClaude {
+		return errors.New("unsupported provider")
+	}
+	if s.FiveHour == nil && s.Weekly == nil {
+		return errors.New("at least one usage window is required")
+	}
+	if s.FiveHour != nil {
+		if s.FiveHour.Kind != WindowFiveHour {
+			return errors.New("five_hour field contains the wrong window kind")
+		}
+		if err := s.FiveHour.Validate(now); err != nil {
+			return err
+		}
+	}
+	if s.Weekly != nil {
+		if s.Weekly.Kind != WindowWeekly {
+			return errors.New("weekly field contains the wrong window kind")
+		}
+		if err := s.Weekly.Validate(now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w UsageWindow) Validate(now time.Time) error {
