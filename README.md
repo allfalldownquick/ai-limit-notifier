@@ -13,6 +13,53 @@ Zero-context usage monitoring and scheduled Telegram reset notifications for Cla
 - **Telegram delivery** — notify a private bot chat or a configured Telegram channel.
 - **Self-hosted or hosted** — the open-source stack can be self-hosted; an optional hosted service can provide the server infrastructure and Telegram delivery.
 
+## Easiest setup: let Claude Code or Codex inspect first
+
+The intended easiest installation path is deliberately different from a blind `curl | bash` flow:
+
+```text
+Open a NEW Claude Code or Codex session
+              |
+              v
+Paste the official install-with-AI prompt
+              |
+              v
+AI inspects your actual Windows / WSL / Linux / macOS setup
+              |
+              v
+AI reviews the repository + installer + security model
+              |
+              v
+AI explains compatibility, missing prerequisites and every planned change
+              |
+              v
+You approve (or decline)
+              |
+              v
+Official installer is applied and adapted to that machine
+              |
+              v
+Doctor + show-payload verification
+              |
+              v
+Telegram pairing
+              |
+              v
+Close the AI session — monitoring runs independently with zero AI calls
+```
+
+This allows the coding agent already running on the machine to handle legitimate environment-specific differences: selecting the correct WSL distribution, choosing a supported install location, creating the project's dedicated directory, installing a documented missing prerequisite, fixing project-owned permissions/PATH/service issues, and explaining any required command or UAC/sudo step.
+
+It may **not** silently weaken security, upload provider credentials, invent screen/browser scraping, add remote execution, or modify unrelated projects/system settings. Unexpected privileged or security-sensitive fixes require a new user approval.
+
+The copy-paste prompt and exact rules are being developed here:
+
+- [`prompts/install-with-ai.md`](prompts/install-with-ai.md)
+- [`docs/AI_ASSISTED_INSTALL.md`](docs/AI_ASSISTED_INSTALL.md)
+- [`docs/INSTALLER_CONTRACT.md`](docs/INSTALLER_CONTRACT.md)
+
+A normal Windows/Linux installer and build-from-source path will remain available for users who do not want AI-assisted setup.
+
 ## Core behavior
 
 The local agent normalizes provider usage to `used_percent`:
@@ -37,7 +84,7 @@ Both 5-hour and weekly windows are tracked. Weekly usage will also support pacin
 | macOS | Planned |
 | Plain Claude desktop/web chat without Claude Code | Not a v0.1 target |
 
-The installer will auto-detect supported local environments rather than requiring users to understand the adapter details.
+The installer will auto-detect supported local environments rather than requiring users to understand the adapter details. The AI-assisted path can additionally explain and fix ordinary machine-specific setup problems while staying inside the documented installer/security contract.
 
 ## Architecture
 
@@ -63,6 +110,8 @@ Telegram private chat OR channel
 ## Development status
 
 Early development. The first milestone is a real WSL proof-of-concept that reads Claude Code and Codex 5-hour/weekly usage without model calls, persists nothing locally at runtime, schedules server-side reset events, and delivers them to Telegram.
+
+The AI-assisted installation documents currently define the installation/review contract; they do not mean a production installer has already been released.
 
 ## Security principles
 
