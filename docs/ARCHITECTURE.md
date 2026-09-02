@@ -6,11 +6,20 @@ AI Limit Notifier is designed around two deployment modes that share the same lo
 
 ### Hosted
 
-A user links the local agent to the public Telegram bot. The hosted service stores only normalized usage/reset data, delivery settings and billing state.
+A user links the local agent to the public AI Limit Notifier Telegram bot operated by the project. The hosted service stores only normalized usage/reset data, delivery settings and billing state.
+
+Launch policy:
+
+- the initial hosted beta is free while monitoring, installation and delivery are being validated with real users;
+- billing support is still designed into the server from the start;
+- hosted pricing is configuration, not hard-coded product logic;
+- after the beta is stable, the hosted service may use a symbolic recurring Telegram Stars subscription, initially `1 XTR` per 30 days if that price is accepted by Telegram's production payment flow;
+- payment behavior must be verified in Telegram's test environment before it is enabled for production users;
+- changing the hosted price later must not require a client update.
 
 ### Self-hosted
 
-A user runs the server and Telegram bot delivery on infrastructure they control. No hosted AI Limit Notifier service is required.
+A user runs the server and Telegram bot delivery on infrastructure they control. No hosted AI Limit Notifier service is required. Self-hosting remains independent of hosted billing.
 
 ## Local agent
 
@@ -136,6 +145,6 @@ The local device never supplies the destination or arbitrary message text. Both 
 
 Hosted billing is separate from the open-source/self-hosted core.
 
-Telegram Stars price must be server-configurable. Digital-service invoices use Telegram Stars (`XTR`). A 30-day recurring subscription may be added after the core monitoring path is proven stable.
+Digital-service invoices use Telegram Stars (`XTR`). Hosted price and billing enablement must be server-configurable. Recurring subscriptions use Telegram's supported subscription period and are enabled only after the free beta monitoring path is proven stable.
 
-Self-hosted use remains independent of hosted billing.
+The local agent contains no pricing enforcement and never receives the Telegram bot token or payment credentials.
