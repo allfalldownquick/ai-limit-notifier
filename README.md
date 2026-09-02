@@ -11,7 +11,7 @@ Zero-context usage monitoring and scheduled Telegram reset notifications for Cla
 - **Credentials stay local** — the hosted server receives only normalized usage percentages and reset timestamps, never Claude/OpenAI credentials, prompts, project files, or terminal contents.
 - **No remote execution** — the hosted server has no protocol for executing commands on connected devices.
 - **Telegram delivery** — notify a private bot chat or a configured Telegram channel.
-- **Self-hosted or hosted** — the open-source stack can be self-hosted; an optional hosted service can provide the server infrastructure and Telegram delivery.
+- **Self-hosted or hosted** — the public source is designed for both modes; an explicit software license still has to be selected before the first public release is called open-source.
 
 ## Easiest setup: let Claude Code or Codex inspect first
 
@@ -107,6 +107,36 @@ Hosted or self-hosted server
 Telegram private chat OR channel
 ```
 
+## Distribution: releases, not a separate user branch
+
+`main` is the product source of truth. Ordinary users will install versioned **GitHub Releases**, not a permanently separate "user" branch.
+
+```text
+main
+  |
+  v
+CI + tests
+  |
+  v
+version tag
+  |
+  v
+GitHub Release
+  +-- Windows installer/binary
+  +-- Linux/WSL binary
+  +-- checksums
+  `-- release notes
+```
+
+The project-hosted VPS does **not** distribute executable code or push updates/commands to connected devices. Its job is only authenticated usage ingestion, durable scheduling, pairing/account state and Telegram delivery. This keeps a server compromise from automatically becoming remote code execution on user machines.
+
+See:
+
+- [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — source/release/server trust boundaries;
+- [`docs/PROTOCOL_V1.md`](docs/PROTOCOL_V1.md) — pairing, device authentication and usage API contract.
+
+The first beta will not have unattended server-driven auto-updates. Those are deferred until release signing and rollback behavior are designed.
+
 ## Development status
 
 Early development. The first milestone is a real WSL proof-of-concept that reads Claude Code and Codex 5-hour/weekly usage without model calls, persists nothing locally at runtime, schedules server-side reset events, and delivers them to Telegram.
@@ -119,7 +149,8 @@ The AI-assisted installation documents currently define the installation/review 
 
 1. Read [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for the exact current implementation state and priority order.
 2. Read [`docs/RELEASE_CRITERIA.md`](docs/RELEASE_CRITERIA.md) for the evidence required before calling v0.1 usable.
-3. Copy [`prompts/continue-development.md`](prompts/continue-development.md) into a new Claude Code or Codex session opened in this repository.
+3. Read [`docs/DECISIONS.md`](docs/DECISIONS.md) for settled choices and remaining blockers.
+4. Copy [`prompts/continue-development.md`](prompts/continue-development.md) into a new Claude Code or Codex session opened in this repository.
 
 The next agent is instructed to inspect first, run current checks, preserve the fixed security constraints, work on `main`, and continue from the first incomplete implementation priority rather than reopening settled product discussions.
 
