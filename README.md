@@ -113,6 +113,18 @@ Early development. The first milestone is a real WSL proof-of-concept that reads
 
 The AI-assisted installation documents currently define the installation/review contract; they do not mean a production installer has already been released.
 
+### Continue development with Claude Code or Codex
+
+`main` is the active product branch. A fresh coding-agent session should not rely on old chat history.
+
+1. Read [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for the exact current implementation state and priority order.
+2. Read [`docs/RELEASE_CRITERIA.md`](docs/RELEASE_CRITERIA.md) for the evidence required before calling v0.1 usable.
+3. Copy [`prompts/continue-development.md`](prompts/continue-development.md) into a new Claude Code or Codex session opened in this repository.
+
+The next agent is instructed to inspect first, run current checks, preserve the fixed security constraints, work on `main`, and continue from the first incomplete implementation priority rather than reopening settled product discussions.
+
+CI on `main` checks Go formatting, `go test ./...`, and `go vet ./...` as the codebase grows.
+
 ## Security principles
 
 See `SECURITY.md` as the implementation develops. The server API will accept a strict, minimal schema and will not accept arbitrary commands, URLs, Telegram messages, local paths, or executable payloads.
