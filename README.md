@@ -161,14 +161,24 @@ Early development. The first milestone is a real WSL proof-of-concept that reads
 
 The AI-assisted installation documents currently define the installation/review contract; they do not mean a production installer has already been released.
 
-### Continue development with Claude Code or Codex
+### Next step: validate the real machine
+
+The architecture/design work that can be done without a real provider installation is largely prepared. The current blocker is P0 evidence from an actual Claude Code/Codex environment.
+
+For that step, open a new Claude Code or Codex coding-agent session in the local repository and use:
+
+- [`prompts/validate-real-machine.md`](prompts/validate-real-machine.md) — canonical P0 procedure for proving the installed Claude/Codex rate-limit readers, field semantics, no-monitoring-model-call behavior, and runtime side effects.
+
+The prompt starts read-only, asks before persistent/privileged changes, rejects unsafe fallbacks, and requires sanitized evidence before production adapters are implemented.
+
+### Continue development after P0
 
 `main` is the active product branch. A fresh coding-agent session should not rely on old chat history.
 
 1. Read [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for the exact current implementation state and priority order.
 2. Read [`docs/RELEASE_CRITERIA.md`](docs/RELEASE_CRITERIA.md) for the evidence required before calling v0.1 usable.
 3. Read [`docs/DECISIONS.md`](docs/DECISIONS.md) for settled choices and remaining blockers.
-4. Copy [`prompts/continue-development.md`](prompts/continue-development.md) into a new Claude Code or Codex session opened in this repository.
+4. After P0 validation, use [`prompts/continue-development.md`](prompts/continue-development.md) for normal implementation continuation.
 
 The next agent is instructed to inspect first, run current checks, preserve the fixed security constraints, work on `main`, and continue from the first incomplete implementation priority rather than reopening settled product discussions.
 
