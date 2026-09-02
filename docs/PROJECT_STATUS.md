@@ -93,13 +93,17 @@ Exit condition: **met for read-only diagnostics** — a user/coding agent can de
 
 Implement provider polling/event capture, normalization, threshold decisions, in-memory retry state and HTTPS delivery.
 
-Requirements:
+**Status: implemented and run on this real machine, except HTTPS delivery (no server exists yet — P3). The sink is an interface with only a print/test implementation today, exactly as scoped.**
 
-- no local usage/history/cache/runtime-log persistence by the application;
-- no provider/model calls created solely for monitoring;
-- bounded CPU/network use;
-- retries with backoff while the process remains alive;
-- safe resubmission after restart with server-side deduplication.
+- `internal/agent`: `Core.Observe` applies the 80%-default threshold and RAM-only per-`(provider, window, reset_at)` dedup — 80→90→100 against the same `reset_at` fires once; a new `reset_at` fires again; delivery uses bounded retry/backoff and only marks a window "sent" on confirmed success, so a sink outage doesn't permanently lose a window's event within the process's lifetime (a restart resending is expected — the future server provides durable idempotency).
+- `internal/provider/codex` is polled on a bounded, configurable interval (`PollCodex`, clamped to a 30s minimum) via `codex app-server`, same P0-proven interface.
+- Claude Code has no on-demand pull, so it's fed passively: `internal/wrapper` implements the statusLine **chaining** wrapper (Claude Code → wrapper → original user command unchanged, plus a best-effort, non-blocking extraction of only the four rate-limit fields) and `internal/claudesock` + `internal/agent.ServeClaudeSocket` carry that snapshot to the agent over a local Unix domain socket under a RAM-backed directory (`XDG_RUNTIME_DIR`, falling back to `/dev/shm`) — never a network socket, never a file the payload is written to.
+- **The user's `~/.claude/statusline-command.sh` is never modified.** `ai-limit-notifier install --plan` (read-only) shows the one persistent settings.json change that would be needed to actually wire the wrapper in; nothing writes to `~/.claude/settings.json` yet — that requires a separate, explicit, user-approved step that does not exist in this build. `doctor`/`status` recognize whether the wrapper is already the configured statusLine command and flag the one obvious drift case (wrapper installed with no `--original-command`, which would silently lose the user's real statusLine output).
+- `ai-limit-notifier monitor [--dry-run] [--codex-interval] [--threshold]` runs both feeds against a print sink and shuts down gracefully (SIGINT/SIGTERM), removing its socket file. Run on this real machine: real Codex data (5h=100% used, correctly crossing the 80% threshold and firing once) and, via the wrapper invoked against the real (untouched) `statusline-command.sh`, real Claude rate-limit numbers observed earlier this session — see `docs/REAL_MACHINE_VALIDATION.md`.
+- Verified on this machine: the wrapper's stdout is byte-for-byte identical to invoking the real script directly for the same input (including ANSI codes and the live-computed reset countdown); no process is left running after SIGTERM; no file anywhere outside the repo/scratch changed (filesystem diff before/after); `~/.claude/settings.json` and `~/.claude/statusline-command.sh` were never touched during this validation (checksums confirmed unchanged before/after).
+- "one provider missing doesn't break the other" and Codex timeout/unavailable/malformed-response handling are proven by unit tests using a fake/missing Codex binary (`internal/agent` and `internal/provider/codex` tests) rather than by uninstalling the real Codex/Claude Code from this machine, which would be a destructive, unnecessary step.
+
+Not yet done: an actual `install` that writes the wrapper into `~/.claude/settings.json` (needs explicit owner approval — this session only showed the plan), `uninstall`/full config-drift detection, and the real HTTPS sink (P3).
 
 ### P3 — hosted server core
 

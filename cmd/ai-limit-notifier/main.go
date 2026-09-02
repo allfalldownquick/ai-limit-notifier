@@ -11,15 +11,22 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
+	"github.com/allfalldownquick/ai-limit-notifier/internal/agent"
+	"github.com/allfalldownquick/ai-limit-notifier/internal/claudesock"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/claude"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/codex"
+	"github.com/allfalldownquick/ai-limit-notifier/internal/wrapper"
 )
 
 const readTimeout = 10 * time.Second
@@ -40,6 +47,12 @@ func main() {
 		code = runShowPayload(os.Args[2:])
 	case "status":
 		code = runStatus(os.Args[2:])
+	case "monitor":
+		code = runMonitor(os.Args[2:])
+	case "statusline-wrapper":
+		code = runStatuslineWrapper(os.Args[2:])
+	case "install":
+		code = runInstall(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		code = 0
@@ -55,10 +68,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `ai-limit-notifier <command>
 
 Commands:
-  detect         Read-only environment/provider detection.
-  doctor         Read-only diagnostics for configured provider readers.
-  show-payload   Show the exact normalized data a future server call would send.
-  status         Concise current local state.`)
+  detect              Read-only environment/provider detection.
+  doctor              Read-only diagnostics for configured provider readers.
+  show-payload        Show the exact normalized data a future server call would send.
+  status              Concise current local state.
+  monitor             Run the RAM-only monitoring agent (Codex polling + Claude socket).
+  statusline-wrapper  Claude Code statusLine chaining wrapper (installed, not run by hand).
+  install --plan      Show the Claude statusLine wrapper installation plan (read-only).`)
 }
 
 // --- shared helpers -------------------------------------------------------
@@ -202,8 +218,21 @@ func runDoctor(args []string) int {
 	} else if !info.Configured {
 		fmt.Println("claude statusLine: NOT CONFIGURED (passive capture requires a configured statusLine command)")
 		ok = false
+	} else if strings.Contains(info.Command, "statusline-wrapper") {
+		fmt.Println("claude statusLine: configured, wrapper installed")
+		if !strings.Contains(info.Command, "--original-command") {
+			fmt.Println("claude statusLine: DRIFT (wrapper installed without --original-command; original statusLine output would be lost)")
+			ok = false
+		}
 	} else {
-		fmt.Println("claude statusLine: configured")
+		fmt.Println("claude statusLine: configured, wrapper NOT installed (passive capture inactive — see `install --plan`)")
+	}
+
+	if conn, err := net.DialTimeout("unix", claudesock.Path(), 200*time.Millisecond); err == nil {
+		_ = conn.Close()
+		fmt.Println("agent socket: reachable")
+	} else {
+		fmt.Println("agent socket: not reachable (monitor is not running)")
 	}
 
 	if v, err := claude.Version(ctx); err != nil {
@@ -295,7 +324,12 @@ func runStatus(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
 
-	fmt.Println("Agent: not implemented (P2)")
+	if conn, err := net.DialTimeout("unix", claudesock.Path(), 200*time.Millisecond); err == nil {
+		_ = conn.Close()
+		fmt.Println("Agent: running (Claude socket reachable)")
+	} else {
+		fmt.Println("Agent: not running")
+	}
 	fmt.Println("Linked: not implemented (P3/P4)")
 
 	r := codex.New()
@@ -307,14 +341,158 @@ func runStatus(args []string) int {
 
 	if info, err := claude.DetectStatusLine(); err != nil {
 		fmt.Printf("Claude Code: unavailable (%v)\n", err)
-	} else if info.Configured {
-		fmt.Println("Claude Code: supported / passive-capture-only (statusLine configured, no live pull yet)")
-	} else {
+	} else if !info.Configured {
 		fmt.Println("Claude Code: supported / statusLine not configured")
+	} else if strings.Contains(info.Command, "statusline-wrapper") {
+		fmt.Println("Claude Code: supported / wrapper installed (passive capture wired to agent socket)")
+	} else {
+		fmt.Println("Claude Code: supported / passive-capture-only (statusLine configured, wrapper not installed — run `install --plan`)")
 	}
 
 	fmt.Println("Local runtime persistence: disabled")
 	fmt.Println("Server: not implemented (P3)")
 
 	return 0
+}
+
+// --- monitor ---------------------------------------------------------------
+
+// printSink is the only Sink that exists before P3: it prints what would be
+// (or, once a real server exists, will be) delivered. It never writes to
+// disk, so both modes satisfy "no persistent runtime state" — --dry-run
+// only changes the label, since there is nothing else to send to yet.
+type printSink struct {
+	w      io.Writer
+	dryRun bool
+}
+
+func (s *printSink) Send(_ context.Context, ev agent.Event) error {
+	label := "would send"
+	if !s.dryRun {
+		label = "observed (no server configured yet — P3)"
+	}
+	fmt.Fprintf(s.w, "[%s] %s %s: %.0f%% used, resets %s\n",
+		label, ev.Provider, ev.Window, ev.UsedPercent, ev.ResetAt.UTC().Format(time.RFC3339))
+	return nil
+}
+
+func runMonitor(args []string) int {
+	fs := flag.NewFlagSet("monitor", flag.ContinueOnError)
+	codexInterval := fs.Duration("codex-interval", 5*time.Minute, "bounded Codex polling interval (clamped to a minimum)")
+	threshold := fs.Float64("threshold", domain.DefaultScheduleThreshold, "used_percent threshold that schedules a reset event")
+	dryRun := fs.Bool("dry-run", true, "show would-be events only; never treated as delivered to a real server (no server exists yet)")
+	if err := fs.Parse(args); err != nil {
+		return 3
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	sink := &printSink{w: os.Stdout, dryRun: *dryRun}
+	core := agent.NewCore(sink, *threshold)
+
+	fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s dry-run=%v\n", *threshold, *codexInterval, *dryRun)
+	fmt.Println("monitor: local runtime persistence disabled; all state is in RAM")
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		agent.PollCodex(ctx, core, codex.New(), *codexInterval)
+	}()
+
+	go func() {
+		defer wg.Done()
+		if err := agent.ServeClaudeSocket(ctx, core); err != nil {
+			fmt.Fprintf(os.Stderr, "monitor: claude socket unavailable: %v\n", err)
+		}
+	}()
+
+	<-ctx.Done()
+	fmt.Println("monitor: shutting down")
+	wg.Wait()
+	return 0
+}
+
+// --- statusline-wrapper ------------------------------------------------
+
+func runStatuslineWrapper(args []string) int {
+	fs := flag.NewFlagSet("statusline-wrapper", flag.ContinueOnError)
+	original := fs.String("original-command", "", "the user's original statusLine command to chain to")
+	if err := fs.Parse(args); err != nil {
+		return 3
+	}
+	// If Claude Code kills a slow statusLine invocation, propagate that so
+	// the chained original command is cancelled too rather than orphaned.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return wrapper.Run(ctx, os.Stdin, os.Stdout, os.Stderr, *original)
+}
+
+// --- install --plan ------------------------------------------------------
+
+func runInstall(args []string) int {
+	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	plan := fs.Bool("plan", false, "show the installation plan without applying it")
+	if err := fs.Parse(args); err != nil {
+		return 3
+	}
+	if !*plan {
+		fmt.Fprintln(os.Stderr, "only `install --plan` is implemented; applying changes requires a separate explicit step that does not exist yet")
+		return 3
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "ai-limit-notifier"
+	}
+
+	info, err := claude.DetectStatusLine()
+	if err != nil {
+		fmt.Printf("Claude statusLine detection failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Println("Plan: Claude Code statusLine chaining wrapper")
+	fmt.Println()
+	if !info.Configured {
+		fmt.Println("Current ~/.claude/settings.json statusLine.command: (none configured)")
+		fmt.Println("Nothing to chain to yet: install a statusLine command first, or this")
+		fmt.Println("plan would need to install a bare (non-chaining) wrapper, which is not")
+		fmt.Println("recommended since there would be no original output to preserve.")
+		return 0
+	}
+	if strings.Contains(info.Command, "statusline-wrapper") {
+		fmt.Println("Current ~/.claude/settings.json statusLine.command already runs the wrapper:")
+		fmt.Printf("  %s\n", info.Command)
+		fmt.Println("No change planned.")
+		return 0
+	}
+
+	proposed := fmt.Sprintf("%s statusline-wrapper --original-command %s", exe, shellQuote(info.Command))
+
+	fmt.Println("This does NOT apply anything. It only shows the one persistent change")
+	fmt.Println("that installing Claude passive capture would make.")
+	fmt.Println()
+	fmt.Println("File: ~/.claude/settings.json")
+	fmt.Println("Field: statusLine.command")
+	fmt.Println()
+	fmt.Printf("Current:  %s\n", info.Command)
+	fmt.Printf("Proposed: %s\n", proposed)
+	fmt.Println()
+	fmt.Println("The wrapper always re-runs the exact current command above with the same")
+	fmt.Println("stdin and copies its stdout/stderr/exit code straight through, so the")
+	fmt.Println("visible statusLine is unaffected. It additionally sends only the four")
+	fmt.Println("normalized rate-limit fields to a local RAM-backed Unix socket for the")
+	fmt.Println("`monitor` agent to consume; if that fails for any reason, the original")
+	fmt.Println("statusLine output is unaffected.")
+	fmt.Println()
+	fmt.Println("This build does not apply this change automatically. Ask the operator to")
+	fmt.Println("edit ~/.claude/settings.json by hand (or wait for a real `install`).")
+	return 0
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

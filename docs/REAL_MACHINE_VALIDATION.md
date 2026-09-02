@@ -219,3 +219,52 @@ The statusLine JSON payload shape is not a publicly versioned/stable API contrac
 - never modify a user's existing statusLine command in a way that risks losing their prior configuration (install-time changes only, with plan/approval, per `docs/INSTALLER_CONTRACT.md`).
 
 P0 is now closed for both providers in the tested environment: Codex CLI `0.152.1` and Claude Code `2.1.258` on Ubuntu 26.04 / WSL2.
+
+## P2 — RAM-only monitoring agent validated on this real machine
+
+Status: **wrapper chaining + Codex polling + Claude socket delivery proven end to end. HTTPS delivery is out of scope (P3 does not exist yet); only the print sink was exercised.**
+
+### monitor --dry-run against real Codex
+
+`ai-limit-notifier monitor --dry-run --codex-interval 30s` was run as a background process on this machine. Its immediate first poll produced:
+
+```text
+[would send] codex five_hour: 100% used, resets 2026-09-02T22:25:39Z
+```
+
+This matches the real live Codex rate limits observed independently in this same session (`doctor`/`status` also reported `five_hour=100% used, weekly=68% used` from the real `codex app-server`). Weekly stayed below the 80% threshold and correctly produced no event.
+
+### Claude wrapper: real, untouched script parity
+
+`~/.claude/statusline-command.sh` was **not modified** for this test (an auto-mode safety classifier declined a second temporary-instrumentation edit of that file in this session, and a non-invasive alternative was used instead — no attempt was made to work around the block). Parity was proven by feeding the same statusLine-shaped payload to both the real script directly and to `ai-limit-notifier statusline-wrapper --original-command "bash ~/.claude/statusline-command.sh"`, and diffing:
+
+```text
+diff direct_out.txt wrapper_out.txt
+(no output — byte-for-byte identical, including ANSI color codes and the
+live-computed "reset Xh Ym" countdown)
+```
+
+The payload's rate-limit values (`five_hour.used_percentage=73`, `resets_at=1788388800`; `seven_day.used_percentage=27`, `resets_at=1788850800`) are the real values observed earlier in this same session's Claude P0 closure, not fabricated numbers; `workspace`/`context_window`/`model` fields were a realistic synthetic shape matching the proven schema. `~/.claude/statusline-command.sh`'s SHA-256 was confirmed unchanged (`77123caf...e360d94`) before and after this test.
+
+### Socket delivery end to end
+
+With `monitor` running, invoking the wrapper against the real script with a rate-limit value above the 80% threshold produced, in the agent's log:
+
+```text
+[would send] claude five_hour: 91% used, resets 2026-09-02T22:40:00Z
+```
+
+confirming: wrapper → Unix socket (`XDG_RUNTIME_DIR`/`ai-limit-notifier-<uid>.sock`) → agent `Core.Observe` → threshold/dedup → sink, with the wrapper's own stdout/exit code toward Claude Code unaffected in every case (see parity test above).
+
+### Cleanup / runtime-write guarantee
+
+- `monitor` was stopped with `SIGTERM`: it logged `monitor: shutting down`, exited cleanly, and removed its own socket file.
+- `ps aux` after every wrapper/monitor invocation showed no leftover child processes (the wrapper's `sh -c` chain to the real script, and that script's own `python3` calls, all exited).
+- A filesystem diff of the repository and `$HOME` from before this validation to after showed no new or modified files anywhere outside the intentional source edits — no state/history/cache/log file was created by AI Limit Notifier.
+- `~/.claude/settings.json` was confirmed unchanged (checksum) throughout.
+
+### What this does not yet prove
+
+- No real HTTPS sink exists (P3), so only the print sink was exercised end to end.
+- "Codex absent" / "Claude absent" behavior (one provider failing must not break the other) was proven with fake/missing binaries in `internal/agent`'s unit tests, not by uninstalling the real Codex/Claude Code from this machine — doing that would be a destructive, unnecessary step for a diagnostics-tool validation.
+- The wrapper was never actually installed into `~/.claude/settings.json` — only `install --plan` (read-only) was run, per the owner's explicit instruction to ask before any persistent Claude config change. A real live end-to-end capture through Claude Code's own statusLine refresh (as opposed to a direct wrapper invocation with a real script and real values) still requires that install step and a separate approval.
