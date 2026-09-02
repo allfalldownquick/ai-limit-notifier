@@ -1,0 +1,38 @@
+# Local secrets/config
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+
+# Runtime/server state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+state/
+data/
+logs/
+
+# Build output
+bin/
+dist/
+build/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
