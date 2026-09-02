@@ -143,25 +143,111 @@ Production adapter requirements:
 - never silently fall back to inference, browser/screen scraping, credential copying, or guessed fields;
 - parse only the minimal required rate-limit data.
 
-## Claude Code — P0 still pending
+## Claude Code — P0 partially validated
+
+Status: **STATIC INTERFACE/SCHEMA PROVEN; REAL RUNTIME CAPTURE STILL PENDING**.
 
 Installed version: `2.1.258`.
 
-The binary contains strings/symbols related to `rate_limits`, `five_hour`, `seven_day`, `utilization`, and `resets_at`, but this is **not sufficient evidence** of the runtime statusLine payload shape or semantics.
+### Candidate interface
 
-At the time of the initial validation:
+The installed Claude Code binary contains the statusLine schema for rate-limit metadata and documents command-based statusLine input as JSON on stdin.
 
-- no `statusLine` was configured in the relevant global config;
-- no active Claude Code process/session was available for capture;
-- no model request was created solely for validation;
-- no safe Claude reader was claimed.
+The relevant installed-version schema was confirmed as:
 
-Next required proof:
+```json
+{
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": "number 0..100",
+      "resets_at": "Unix epoch seconds"
+    },
+    "seven_day": {
+      "used_percentage": "number 0..100",
+      "resets_at": "Unix epoch seconds"
+    }
+  }
+}
+```
 
-1. determine the exact statusLine schema for the installed Claude Code version using read-only inspection where possible;
-2. if real capture requires a temporary statusLine configuration, obtain explicit user approval first;
-3. capture only the minimum rate-limit fields during a normal Claude Code session, not by creating a prompt/session solely to consume tokens for monitoring;
-4. restore the prior configuration exactly after the test;
-5. prove 5-hour/weekly percentage and reset timestamp semantics from real observed data.
+The installed schema also includes an unrelated `spend_limit` window. AI Limit Notifier does not need that field and should ignore it.
 
-P0 is not complete until the Claude Code reader is either proven safe for the declared v0.1 environment or that environment is explicitly scoped out as unsupported.
+Observed semantics from installed-version documentation/code:
+
+- `used_percentage` means **used percentage**, 0–100;
+- `resets_at` is Unix epoch seconds;
+- `rate_limits` is optional;
+- the data is expected only after a normal Claude API response and while a current window exists;
+- missing windows must therefore remain unknown rather than becoming zero.
+
+### Existing statusLine configuration
+
+During the later read-only inspection, `~/.claude/settings.json` already contained a command-based `statusLine` pointing to an existing `~/.claude/statusline-command.sh`.
+
+Read-only inspection of that existing script found that it already consumes the four fields required by AI Limit Notifier. No signs of network access or disk writes were found in that script during static inspection. The script was not modified.
+
+This is useful evidence for compatibility, but static script/binary inspection alone is not enough to mark the Claude reader safe.
+
+### Passive capture attempt
+
+A user-approved temporary passive capture mechanism was armed with these constraints:
+
+- only `statusLine.command` was temporarily replaced;
+- the exact original `~/.claude/settings.json` bytes were backed up in `/dev/shm`;
+- temporary wrapper/collector/socket state existed only in `/dev/shm`;
+- no new Claude session, prompt, message, or model request was created for monitoring;
+- no monitoring instructions were added to model context;
+- no persistent AI Limit Notifier capture/history/cache/log state was written.
+
+No normal active Claude Code session produced a statusLine invocation during the test interval, so **no real statusLine stdin payload was observed**.
+
+The capture was therefore stopped without claiming success.
+
+### Rollback result
+
+The temporary configuration was safely rolled back:
+
+- `settings.json` restored byte-for-byte: **YES**;
+- original/final SHA-256 matched: **YES**;
+- original statusLine command restored: **YES**;
+- temporary `/dev/shm` backup/wrapper/socket removed: **YES**;
+- repository remained clean: **YES**.
+
+Observed restored file metadata during validation: mode `0644`, uid `1000`, gid `1000`.
+
+### Model/context result so far
+
+For the passive capture mechanism itself:
+
+- model request created by monitoring: **NO**;
+- model context added by monitoring: **NO**;
+- temporary capture network activity: **NONE by design/static inspection**;
+- notifier-owned persistent runtime writes: **NONE**.
+
+A normal active Claude Code session is still required to prove the runtime payload path end to end.
+
+### Compatibility risks
+
+For Claude Code `2.1.258` on this tested WSL2 environment:
+
+- rate-limit windows are optional;
+- rate-limit data appears only after a normal provider response and while the window is current;
+- statusLine is tied to an active/trusted Claude Code workspace/session;
+- exact invocation cadence has not yet been proven;
+- installed-version schema evidence must not be generalized to other Claude Code versions without version-aware compatibility handling.
+
+### Remaining proof required
+
+To complete Claude P0:
+
+1. use a normal active Claude Code session that the user would have run anyway;
+2. arm the same passive in-memory capture mechanism;
+3. observe a real statusLine JSON stdin payload after a natural Claude response;
+4. prove whether both `five_hour` and `seven_day` are present on the user's account at that moment;
+5. capture only the four required fields;
+6. normalize the observed values into `UsageSnapshot` without inventing missing windows;
+7. restore the original statusLine configuration byte-for-byte and verify its hash again.
+
+No prompt/session should be created solely to consume tokens for this validation.
+
+P0 is not complete until the Claude Code reader is proven with a real runtime capture for the declared v0.1 environment, or Claude Code is explicitly scoped out of v0.1 support.
