@@ -7,8 +7,8 @@ Do not publish a stable/usable release until every required item below is verifi
 ## Provider collection
 
 - [ ] Claude Code usage/reset data is read on a real supported WSL/Linux installation without creating a model request.
-- [ ] Codex usage/reset data is read on a real supported WSL/Linux installation without creating a model turn/request.
-- [ ] 5-hour and weekly windows are normalized correctly when present.
+- [x] Codex usage/reset data is read on a real supported WSL/Linux installation without creating a model turn/request. Proven on Codex CLI 0.152.1 / Ubuntu 26.04 / WSL2; see `docs/REAL_MACHINE_VALIDATION.md`.
+- [ ] 5-hour and weekly windows are normalized correctly when present across every provider declared supported by v0.1.
 - [ ] Missing/partial windows remain unknown and never become fake zero values.
 - [ ] Provider credentials never leave the local machine through AI Limit Notifier.
 
