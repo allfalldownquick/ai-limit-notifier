@@ -24,7 +24,12 @@ jobs:
       - name: Check formatting
         shell: bash
         run: |
-          files="$(gofmt -l .)"
+          mapfile -d '' go_files < <(find . -type f -name '*.go' -print0)
+          if [ "${#go_files[@]}" -eq 0 ]; then
+            echo "No Go files found."
+            exit 0
+          fi
+          files="$(gofmt -l "${go_files[@]}")"
           if [ -n "$files" ]; then
             echo "The following files are not gofmt-clean:"
             echo "$files"
