@@ -4,7 +4,7 @@ This file is the handoff point for continuing development in Claude Code or Code
 
 ## Current state
 
-The repository contains the product architecture, security constraints, AI-assisted installation contract, installer command contract, and the first domain primitives for normalized usage windows and weekly pacing.
+The repository contains the product architecture, security constraints, AI-assisted installation contract, installer command contract, distribution/protocol boundaries, licensing decisions, and the first domain primitives for normalized usage windows and weekly pacing.
 
 The project is **not yet a usable release**. The next work is implementation and real-machine validation, not more product brainstorming.
 
@@ -12,14 +12,18 @@ Implemented now:
 
 - normalized `codex` / `claude` provider model;
 - optional 5-hour and weekly windows (`missing` means unknown, never zero);
-- Codex `left` -> internal `used_percent` normalization;
+- Codex `left` -> internal `used_percent` normalization primitive;
 - default 80% reset scheduling threshold primitive;
 - reset timestamp validation primitives;
 - weekly even-pace calculation;
 - unit tests for the current domain behavior;
 - documented zero-context / zero-local-runtime-write / no-remote-execution constraints;
 - documented assisted-install flow and installer CLI contract;
-- hosted beta policy: project bot/server, initially free.
+- documented GitHub Release / hosted-server trust boundary;
+- documented pairing/device API direction;
+- source-available PolyForm Shield 1.0.0 licensing with future individual company arrangements preserved;
+- hosted beta policy: project bot/server, initially free;
+- CI on `main` for formatting, tests, and vetting.
 
 ## Development rule
 
@@ -31,7 +35,9 @@ Do not add advertising, growth features, paid tiers, dashboards, or unrelated in
 
 ### P0 — prove provider reads on a real WSL/Linux machine
 
-This is the current highest priority.
+This is the current highest priority and the first step that requires access to the user's real Claude Code/Codex installation.
+
+Use [`prompts/validate-real-machine.md`](../prompts/validate-real-machine.md) for this phase. It is deliberately validation-first and requires evidence before production adapters are written.
 
 Claude Code:
 
@@ -47,7 +53,7 @@ Codex:
 - do not upload Codex credentials to AI Limit Notifier;
 - treat internal/unstable interfaces explicitly as compatibility-sensitive.
 
-Exit condition: a small PoC can print normalized snapshots for the user's real Claude Code and Codex setup while satisfying the security/runtime-write invariants.
+Exit condition: a small PoC can print normalized snapshots for the user's real Claude Code and Codex setup while satisfying the security/runtime-write invariants, with the tested versions and field semantics documented from real observations.
 
 ### P1 — local CLI and diagnostics
 
@@ -148,6 +154,8 @@ Telegram Stars billing is intentionally later. The server architecture may conta
 
 Read and satisfy `docs/RELEASE_CRITERIA.md`.
 
-## Starting a new Claude Code / Codex development session
+## Starting the next real-machine session
 
-Use `prompts/continue-development.md`. It tells the next coding agent to inspect the current repository, preserve the fixed security constraints, work on `main`, run tests, and start at the first incomplete priority above instead of reopening settled product decisions.
+For the immediate P0 work, use [`prompts/validate-real-machine.md`](../prompts/validate-real-machine.md). It tells Claude Code/Codex to inspect the actual installed versions, prove the available rate-limit fields and side effects, avoid unsafe fallbacks, and save only sanitized validation facts.
+
+After P0 is proven, use `prompts/continue-development.md` for normal implementation continuation.
