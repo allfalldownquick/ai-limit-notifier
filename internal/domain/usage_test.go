@@ -25,6 +25,9 @@ func TestShouldScheduleReset(t *testing.T) {
 	if !ShouldScheduleReset(100, 80) {
 		t.Fatal("100% should schedule at an 80% threshold")
 	}
+	if ShouldScheduleReset(math.NaN(), 80) {
+		t.Fatal("NaN usage must never schedule")
+	}
 }
 
 func TestWeeklyPace(t *testing.T) {
@@ -53,5 +56,27 @@ func TestUsageWindowRejectsStaleReset(t *testing.T) {
 	}
 	if err := window.Validate(now); err == nil {
 		t.Fatal("expected stale reset_at to be rejected")
+	}
+}
+
+func TestSnapshotAllowsPartialWindows(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := UsageSnapshot{
+		Provider: ProviderCodex,
+		Weekly: &UsageWindow{
+			Kind:        WindowWeekly,
+			UsedPercent: 55,
+			ResetAt:     now.Add(48 * time.Hour),
+		},
+	}
+	if err := snapshot.Validate(now); err != nil {
+		t.Fatalf("partial snapshot should be valid: %v", err)
+	}
+}
+
+func TestSnapshotRequiresAtLeastOneWindow(t *testing.T) {
+	snapshot := UsageSnapshot{Provider: ProviderClaude}
+	if err := snapshot.Validate(time.Now().UTC()); err == nil {
+		t.Fatal("snapshot with no windows should be rejected")
 	}
 }
