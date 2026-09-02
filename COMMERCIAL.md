@@ -1,38 +1,34 @@
 # Commercial Licensing
 
-AI Limit Notifier is publicly available under the **PolyForm Noncommercial License 1.0.0** for permitted noncommercial use.
+AI Limit Notifier is available under the **PolyForm Noncommercial License 1.0.0** for permitted noncommercial use.
 
-Commercial use is **not granted by the public license**. A separate commercial license from the project copyright holder is required when the software is used for a commercial purpose.
+Commercial use requires a separate commercial license from the project owner.
 
-Examples that should be treated as requiring a commercial license include:
+## Commercial use
 
-- using AI Limit Notifier as part of business operations;
-- running it internally for a commercial company;
-- offering a hosted or managed service based on the software;
-- integrating the software into a paid product or service;
-- redistributing it as part of a commercial offering;
-- embedding or white-labeling the client, server, or substantial portions of the code in a commercial product.
+If you want to use AI Limit Notifier for a company, paid service, SaaS, redistribution, embedding, white-labeling, or another commercial purpose, contact the project owner for a commercial license.
 
-The exact commercial terms can differ by use case. A commercial license may cover, for example, internal company use, a defined number of users/devices, hosted/SaaS use, redistribution, OEM/embedding rights, support, or a negotiated enterprise scope.
+**Commercial licensing is offered individually.** There is no fixed public price or standard plan at this stage. Terms and pricing are discussed based on the intended use.
 
-No public commercial price is fixed yet. Commercial terms are negotiated separately and do not change the rights granted to noncommercial users under the repository's public license.
+When contacting us, briefly describe:
+
+- who will use the software;
+- how you plan to use it;
+- whether it is internal use, SaaS/hosting, redistribution, or integration into another product;
+- approximate scale if relevant.
 
 ## Contact
 
-A dedicated private licensing email will be published here before the first broad public beta.
+A dedicated private licensing email will be published before the broad public release.
 
-Until that address is configured, a company may open a GitHub issue titled `Commercial licensing inquiry` **without posting confidential business information** and request a private contact method from the repository owner.
+Until then, a company may open a GitHub issue titled `Commercial licensing inquiry` and ask for a private contact method. Do not post confidential business information, contracts, billing details, credentials, or personal data in a public issue.
 
-Do not post contracts, personal data, billing information, credentials, internal architecture, or other confidential information in a public GitHub issue.
+## Hosted service vs software license
 
-## Important distinction
+A subscription to the project-operated hosted notification service and a commercial software license are separate unless the applicable hosted-service terms explicitly state otherwise.
 
-A paid subscription to the project-operated hosted notification service and a commercial software license are separate concepts unless the applicable hosted-service terms explicitly say that the subscription includes commercial-use rights.
+## License model
 
-For the initial beta, the project should not assume that ordinary hosted access automatically grants a company commercial rights to the source or binaries.
+Because the public license restricts commercial use, AI Limit Notifier should be described as **source-available**, not OSI-approved open source.
 
-## Source-available, not OSI Open Source
-
-Because the public license limits use to noncommercial purposes, this project should be described as **source-available** rather than OSI-approved open source.
-
-This document is a licensing overview, not a substitute for the applicable license text or a signed commercial agreement.
+See `LICENSE` for the public license terms. This page is only a practical overview; a commercial license is granted through a separate agreement with the project owner.
