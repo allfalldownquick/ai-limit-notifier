@@ -4,11 +4,11 @@ This file is the handoff point for continuing development in Claude Code or Code
 
 ## Current state
 
-The repository contains the product architecture, security constraints, AI-assisted installation contract, installer command contract, distribution/protocol boundaries, licensing decisions, and the first domain primitives for normalized usage windows and weekly pacing.
+The repository contains the product architecture, security constraints, AI-assisted installation contract, installer command contract, distribution/protocol boundaries, licensing decisions, the first domain primitives for normalized usage windows and weekly pacing, and real-machine validation evidence for Codex.
 
 The project is **not yet a usable release**. The next work is implementation and real-machine validation, not more product brainstorming.
 
-Implemented now:
+Implemented/proven now:
 
 - normalized `codex` / `claude` provider model;
 - optional 5-hour and weekly windows (`missing` means unknown, never zero);
@@ -23,7 +23,10 @@ Implemented now:
 - documented pairing/device API direction;
 - source-available PolyForm Shield 1.0.0 licensing with future individual company arrangements preserved;
 - hosted beta policy: project bot/server, initially free;
-- CI on `main` for formatting, tests, and vetting.
+- CI on `main` for formatting, tests, and vetting;
+- **Codex 0.152.1 on Ubuntu 26.04 / WSL2: real read-only rate-limit path proven via `codex app-server --stdio` -> JSON-RPC `initialize` -> `account/rateLimits/read`; real 5-hour/weekly fields and semantics observed without creating a thread/turn/prompt/inference request.**
+
+See `docs/REAL_MACHINE_VALIDATION.md` for sanitized evidence and compatibility caveats.
 
 ## Development rule
 
@@ -35,25 +38,33 @@ Do not add advertising, growth features, paid tiers, dashboards, or unrelated in
 
 ### P0 — prove provider reads on a real WSL/Linux machine
 
-This is the current highest priority and the first step that requires access to the user's real Claude Code/Codex installation.
+**Current P0 status: Codex proven for the tested version/environment; Claude Code still pending.**
 
 Use [`prompts/validate-real-machine.md`](../prompts/validate-real-machine.md) for this phase. It is deliberately validation-first and requires evidence before production adapters are written.
 
-Claude Code:
+Claude Code — **PENDING**:
 
 - obtain 5-hour and weekly usage/reset metadata without sending a model prompt;
-- do not persist monitored usage to local files;
+- do not persist monitored usage to AI Limit Notifier runtime files;
 - validate whether `statusLine` rate-limit data is sufficiently reliable for the supported Claude Code versions;
-- treat absent/partial data as unknown.
+- treat absent/partial data as unknown;
+- if temporary statusLine configuration is needed for proof, require explicit user approval and restore the prior value exactly after the test.
 
-Codex:
+Codex — **PROVEN on 0.152.1 / Ubuntu 26.04 / WSL2**:
 
-- use the local Codex app-server `account/rateLimits/read` interface or another verified read-only local interface;
-- do not start a thread/turn or otherwise consume model tokens just to monitor usage;
-- do not upload Codex credentials to AI Limit Notifier;
-- treat internal/unstable interfaces explicitly as compatibility-sensitive.
+- local interface: `codex app-server --stdio`;
+- protocol: JSON-RPC 2.0;
+- sequence: `initialize` then `account/rateLimits/read`;
+- `primary.windowDurationMins = 300` was observed as the 5-hour window;
+- `secondary.windowDurationMins = 10080` was observed as the weekly window;
+- `usedPercent` is used percentage;
+- `resetsAt` is Unix epoch seconds;
+- no `thread/*`, `turn/*`, prompt, completion/chat, or inference request was invoked for the validated read;
+- app-server is experimental, so production support must be version-aware and fail closed when schema/interface compatibility is not proven.
 
-Exit condition: a small PoC can print normalized snapshots for the user's real Claude Code and Codex setup while satisfying the security/runtime-write invariants, with the tested versions and field semantics documented from real observations.
+Whether Codex performs a network request on each rate-limit read is not yet proven and is not required for the zero-model-call guarantee. Provider-owned writes under `~/.codex` are distinct from the product guarantee that AI Limit Notifier itself must not persist monitored usage/runtime state.
+
+Exit condition: Claude Code is either proven with the same evidence standard for the declared v0.1 environment, or the v0.1 support matrix is narrowed explicitly. Then production provider adapters can be implemented from observed schemas rather than assumptions.
 
 ### P1 — local CLI and diagnostics
 
@@ -156,6 +167,6 @@ Read and satisfy `docs/RELEASE_CRITERIA.md`.
 
 ## Starting the next real-machine session
 
-For the immediate P0 work, use [`prompts/validate-real-machine.md`](../prompts/validate-real-machine.md). It tells Claude Code/Codex to inspect the actual installed versions, prove the available rate-limit fields and side effects, avoid unsafe fallbacks, and save only sanitized validation facts.
+For the remaining P0 work, continue with [`prompts/validate-real-machine.md`](../prompts/validate-real-machine.md), now focusing on Claude Code. The Codex reader is already evidenced in `docs/REAL_MACHINE_VALIDATION.md`; do not repeat it unless a version/environment change requires revalidation.
 
-After P0 is proven, use `prompts/continue-development.md` for normal implementation continuation.
+After P0 is closed, use `prompts/continue-development.md` for normal implementation continuation.
