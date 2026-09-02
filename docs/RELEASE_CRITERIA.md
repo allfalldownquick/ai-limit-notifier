@@ -6,7 +6,7 @@ Do not publish a stable/usable release until every required item below is verifi
 
 ## Provider collection
 
-- [ ] Claude Code usage/reset data is read on a real supported WSL/Linux installation without creating a model request.
+- [x] Claude Code usage/reset data is read on a real supported WSL/Linux installation without creating a model request. Proven on Claude Code 2.1.258 / Ubuntu 26.04 / WSL2; see `docs/REAL_MACHINE_VALIDATION.md`. (Production adapter implementation with version-aware fail-closed handling still required — see P0 exit condition in `docs/PROJECT_STATUS.md`.)
 - [x] Codex usage/reset data is read on a real supported WSL/Linux installation without creating a model turn/request. Proven on Codex CLI 0.152.1 / Ubuntu 26.04 / WSL2; see `docs/REAL_MACHINE_VALIDATION.md`.
 - [ ] 5-hour and weekly windows are normalized correctly when present across every provider declared supported by v0.1.
 - [ ] Missing/partial windows remain unknown and never become fake zero values.
@@ -14,19 +14,19 @@ Do not publish a stable/usable release until every required item below is verifi
 
 ## Local runtime guarantees
 
-- [ ] Monitoring does not create/update usage state, history, cache, or application runtime-log files locally.
-- [ ] Install-time static files are documented separately from runtime behavior.
-- [ ] Monitoring adds zero prompts/model context and makes zero LLM calls for the purpose of checking limits.
-- [ ] CPU/network polling is bounded and measured under normal use.
+- [x] Monitoring does not create/update usage state, history, cache, or application runtime-log files locally. Verified by filesystem diff before/after running `detect`/`doctor`/`show-payload`/`status` against real providers on this machine: zero files created/modified anywhere outside intentional source edits.
+- [ ] Install-time static files are documented separately from runtime behavior. (No installer exists yet to document.)
+- [x] Monitoring adds zero prompts/model context and makes zero LLM calls for the purpose of checking limits. Verified for Codex (`initialize` + `account/rateLimits/read` only, no thread/turn/prompt method) and for Claude (statusLine capture is passive; the CLI's own `--claude-stdin` path makes no model call at all).
+- [ ] CPU/network polling is bounded and measured under normal use. (No polling loop exists yet — P2.)
 
 ## Installation and diagnostics
 
-- [ ] `detect` reports supported providers/environment accurately.
-- [ ] `install --plan` describes every persistent change before applying it.
-- [ ] `install` performs only approved/documented changes.
-- [ ] `doctor` verifies integrations, connectivity, permissions, and runtime invariants without exposing secrets.
-- [ ] `show-payload` displays the exact normalized data class that can leave the machine and contains no credentials/prompts/project data.
-- [ ] `status` works when one provider/window is unavailable.
+- [x] `detect` reports supported providers/environment accurately. Run on this real machine (Ubuntu 26.04/WSL2): reports OS/WSL, codex/claude binary + version, statusLine configuration; exit code distinguishes ready/needs-fix/unsupported.
+- [ ] `install --plan` describes every persistent change before applying it. (Not implemented — no installer exists yet.)
+- [ ] `install` performs only approved/documented changes. (Not implemented.)
+- [x] `doctor` verifies integrations, connectivity, permissions, and runtime invariants without exposing secrets. Run on this real machine; exercises the live Codex reader and Claude statusLine detection, reports "model requests consumed by this check: 0".
+- [x] `show-payload` displays the exact normalized data class that can leave the machine and contains no credentials/prompts/project data. Verified against real Codex live data and a real captured Claude statusLine payload; output is structurally limited to `provider`/`five_hour`/`weekly` `used_percent`/`reset_at`.
+- [x] `status` works when one provider/window is unavailable. Each provider check is independently wrapped so a Codex or Claude failure prints as `unavailable: <reason>` for that provider only.
 - [ ] `uninstall --plan` describes cleanup.
 - [ ] `uninstall` removes the service/agent and project-owned integration changes without damaging Claude Code, Codex, WSL, Git, or user projects.
 

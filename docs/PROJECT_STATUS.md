@@ -4,6 +4,8 @@ This file is the handoff point for continuing development in Claude Code or Code
 
 ## Current state
 
+**P0 is now closed for both providers** (Codex + Claude Code) on Ubuntu 26.04 / WSL2. See below and `docs/REAL_MACHINE_VALIDATION.md`.
+
 The repository contains the product architecture, security constraints, AI-assisted installation contract, installer command contract, distribution/protocol boundaries, licensing decisions, the first domain primitives for normalized usage windows and weekly pacing, and real-machine validation evidence for Codex.
 
 The project is **not yet a usable release**. The next work is implementation and real-machine validation, not more product brainstorming.
@@ -25,6 +27,7 @@ Implemented/proven now:
 - hosted beta policy: project bot/server, initially free;
 - CI on `main` for formatting, tests, and vetting;
 - **Codex 0.152.1 on Ubuntu 26.04 / WSL2: real read-only rate-limit path proven via `codex app-server --stdio` -> JSON-RPC `initialize` -> `account/rateLimits/read`; real 5-hour/weekly fields and semantics observed without creating a thread/turn/prompt/inference request.**
+- **Claude Code 2.1.258 on Ubuntu 26.04 / WSL2: real read-only rate-limit path proven via the existing `statusLine` command mechanism; real 5-hour/weekly `used_percentage`/`resets_at` fields observed via a temporary, byte-for-byte-restored instrumentation of the user's pre-existing statusLine script, with zero model requests and zero AI Limit Notifier persistent runtime writes.**
 
 See `docs/REAL_MACHINE_VALIDATION.md` for sanitized evidence and compatibility caveats.
 
@@ -38,17 +41,18 @@ Do not add advertising, growth features, paid tiers, dashboards, or unrelated in
 
 ### P0 — prove provider reads on a real WSL/Linux machine
 
-**Current P0 status: Codex proven for the tested version/environment; Claude Code still pending.**
+**Current P0 status: Codex and Claude Code both proven for the tested version/environment.**
 
 Use [`prompts/validate-real-machine.md`](../prompts/validate-real-machine.md) for this phase. It is deliberately validation-first and requires evidence before production adapters are written.
 
-Claude Code — **PENDING**:
+Claude Code — **PROVEN on 2.1.258 / Ubuntu 26.04 / WSL2**:
 
-- obtain 5-hour and weekly usage/reset metadata without sending a model prompt;
-- do not persist monitored usage to AI Limit Notifier runtime files;
-- validate whether `statusLine` rate-limit data is sufficiently reliable for the supported Claude Code versions;
-- treat absent/partial data as unknown;
-- if temporary statusLine configuration is needed for proof, require explicit user approval and restore the prior value exactly after the test.
+- local interface: the existing `statusLine` command mechanism (`~/.claude/statusline-command.sh`), invoked by Claude Code's own refresh cadence, not by any monitoring-triggered action;
+- fields: `rate_limits.five_hour.used_percentage`, `rate_limits.five_hour.resets_at`, `rate_limits.seven_day.used_percentage`, `rate_limits.seven_day.resets_at`;
+- `used_percentage` is already used percentage; `resets_at` is Unix epoch seconds;
+- no model request/prompt was created to obtain the capture;
+- AI Limit Notifier made zero persistent runtime writes; the temporary capture artifact lived only in `/dev/shm` (RAM) and was deleted, and the instrumented script was restored byte-for-byte (SHA-256 verified);
+- statusLine JSON shape is not a publicly versioned API, so the production adapter must be version-aware and fail closed (report `unknown`/`unsupported`) rather than guess.
 
 Codex — **PROVEN on 0.152.1 / Ubuntu 26.04 / WSL2**:
 
@@ -64,22 +68,26 @@ Codex — **PROVEN on 0.152.1 / Ubuntu 26.04 / WSL2**:
 
 Whether Codex performs a network request on each rate-limit read is not yet proven and is not required for the zero-model-call guarantee. Provider-owned writes under `~/.codex` are distinct from the product guarantee that AI Limit Notifier itself must not persist monitored usage/runtime state.
 
-Exit condition: Claude Code is either proven with the same evidence standard for the declared v0.1 environment, or the v0.1 support matrix is narrowed explicitly. Then production provider adapters can be implemented from observed schemas rather than assumptions.
+Exit condition met: both providers are proven with real-machine evidence for the declared v0.1 environment (Ubuntu 26.04 / WSL2). Production provider adapters can now be implemented from the observed schemas above rather than assumptions.
 
 ### P1 — local CLI and diagnostics
 
 Implement the stable local surface defined in `docs/INSTALLER_CONTRACT.md`:
 
-- `detect`;
-- `install --plan`;
-- `doctor`;
-- `show-payload`;
-- `status`;
-- `uninstall --plan`.
+- [x] `detect`;
+- [ ] `install --plan`;
+- [x] `doctor`;
+- [x] `show-payload`;
+- [x] `status`;
+- [ ] `uninstall --plan`.
 
-`show-payload` must make data minimization independently inspectable by the user.
+`detect`, `doctor`, `show-payload`, `status` are implemented in `cmd/ai-limit-notifier` on top of `internal/provider/codex` and `internal/provider/claude`, and have been run on this real machine against the real installed Codex/Claude Code (see the session that closed Claude P0). `install --plan`/`uninstall --plan` are not implemented yet; there is no persistent installation to plan for until P2/P5 exist.
 
-Exit condition: a user/coding agent can determine compatibility and see exactly what would be installed/sent before enabling monitoring.
+Codex's `show-payload`/`doctor`/`status` pull a live snapshot synchronously via `codex app-server`. Claude Code has no on-demand query interface: it only hands rate-limit data to a configured `statusLine` command on its own refresh cadence. `show-payload --provider claude` therefore accepts a captured payload via `--claude-stdin` (matching the real payload shape) rather than pulling live; turning the passive capture into a continuously available snapshot is P2 work.
+
+`show-payload` must make data minimization independently inspectable by the user. Verified: the JSON it prints for both providers contains only `provider`/`five_hour`/`weekly` (`used_percent`, `reset_at`); it structurally cannot carry the credits/plan/upsell/account metadata or workspace/context_window/model fields present in the raw provider payloads, since the parsing structs never define fields for them.
+
+Exit condition: **met for read-only diagnostics** — a user/coding agent can determine compatibility and see exactly what would be sent before enabling monitoring. Not yet met for the "installed" half (`install --plan`/`uninstall --plan`), which is P5 territory.
 
 ### P2 — RAM-only monitoring agent
 
@@ -167,6 +175,6 @@ Read and satisfy `docs/RELEASE_CRITERIA.md`.
 
 ## Starting the next real-machine session
 
-For the remaining P0 work, continue with [`prompts/validate-real-machine.md`](../prompts/validate-real-machine.md), now focusing on Claude Code. The Codex reader is already evidenced in `docs/REAL_MACHINE_VALIDATION.md`; do not repeat it unless a version/environment change requires revalidation.
+P0 is closed for both providers; both readers are evidenced in `docs/REAL_MACHINE_VALIDATION.md`. Do not repeat P0 validation unless a version/environment change requires revalidation.
 
-After P0 is closed, use `prompts/continue-development.md` for normal implementation continuation.
+Use [`prompts/continue-development.md`](../prompts/continue-development.md) for normal implementation continuation (P1 local CLI onward).

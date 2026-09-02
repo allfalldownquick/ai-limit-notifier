@@ -143,111 +143,79 @@ Production adapter requirements:
 - never silently fall back to inference, browser/screen scraping, credential copying, or guessed fields;
 - parse only the minimal required rate-limit data.
 
-## Claude Code — P0 partially validated
+## Claude Code — P0 validated
 
-Status: **STATIC INTERFACE/SCHEMA PROVEN; REAL RUNTIME CAPTURE STILL PENDING**.
+Status: **SAFE READER PROVEN for the tested environment/version**.
 
-Installed version: `2.1.258`.
+Installed version: `2.1.258` (Ubuntu 26.04 / WSL2).
 
-### Candidate interface
+This closes out an earlier same-day attempt at this validation, which got as far as confirming the statusLine schema and safely arming/disarming the passive-capture mechanism, but observed no active Claude Code session during its test interval and so recorded no real payload. The run documented below used the same rollback-verified method and did observe a real payload.
 
-The installed Claude Code binary contains the statusLine schema for rate-limit metadata and documents command-based statusLine input as JSON on stdin.
+### Interface
 
-The relevant installed-version schema was confirmed as:
+Claude Code's own `statusLine` mechanism invokes a user-configured command with a JSON payload on stdin on its normal refresh cadence (not on-demand for monitoring). The pre-existing, user-owned script `~/.claude/statusline-command.sh` (already configured before this project existed, for an unrelated PS1-style prompt) already parsed the exact fields needed:
+
+```text
+rate_limits.five_hour.used_percentage
+rate_limits.five_hour.resets_at
+rate_limits.seven_day.used_percentage
+rate_limits.seven_day.resets_at
+```
+
+### Validation method
+
+1. SHA-256 of the original script was recorded and a byte-for-byte copy was kept in `/dev/shm` (tmpfs, RAM-backed) only.
+2. One additive line was inserted immediately after the script's existing field-extraction lines. It reused the already-computed shell variables (`usage`, `resets_at`, `weekly_usage`, `weekly_resets_at`) and wrote only those four values to `/dev/shm/ai-limit-notifier-p0-capture.json`. No existing line was modified, reordered, or removed; the script's visible statusLine output was unchanged.
+3. The capture file appeared after 5 seconds via Claude Code's own normal statusLine refresh — no prompt/message/model request was sent to trigger it.
+4. The original script was restored from the `/dev/shm` backup immediately after capture. Final SHA-256 matched the pre-edit SHA-256 exactly.
+5. All `/dev/shm` artifacts (backup, sha256 file, capture file) were deleted. `~/.claude/settings.json` was never modified (verified unchanged via checksum before/after).
+
+### Observed payload (sanitized)
+
+```json
+{"five_hour": {"used_percentage": "65", "resets_at": "1788388800"}, "weekly": {"used_percentage": "27", "resets_at": "1788850800"}}
+```
+
+### Field semantics
+
+- `rate_limits.five_hour.used_percentage` / `rate_limits.seven_day.used_percentage` are already **used percentage** (0..100), not remaining.
+- `rate_limits.five_hour.resets_at` / `rate_limits.seven_day.resets_at` are Unix epoch seconds.
+- Missing window/field must still be treated as unknown, never zero.
+- The installed statusLine schema also exposes an unrelated `spend_limit` window (from an earlier static read-only inspection of this same installed version); AI Limit Notifier does not need it and ignores it.
+
+Observed normalized snapshot:
 
 ```json
 {
-  "rate_limits": {
-    "five_hour": {
-      "used_percentage": "number 0..100",
-      "resets_at": "Unix epoch seconds"
-    },
-    "seven_day": {
-      "used_percentage": "number 0..100",
-      "resets_at": "Unix epoch seconds"
-    }
+  "provider": "claude",
+  "five_hour": {
+    "used_percent": 65,
+    "reset_at": "2026-09-02T22:40:00Z"
+  },
+  "weekly": {
+    "used_percent": 27,
+    "reset_at": "2026-09-08T07:00:00Z"
   }
 }
 ```
 
-The installed schema also includes an unrelated `spend_limit` window. AI Limit Notifier does not need that field and should ignore it.
+### Model/context result
 
-Observed semantics from installed-version documentation/code:
+- model request created solely for monitoring: **NO**;
+- model context added: **NO**;
+- capture was driven entirely by Claude Code's own pre-existing statusLine refresh, not by any action taken to "use" the assistant.
 
-- `used_percentage` means **used percentage**, 0–100;
-- `resets_at` is Unix epoch seconds;
-- `rate_limits` is optional;
-- the data is expected only after a normal Claude API response and while a current window exists;
-- missing windows must therefore remain unknown rather than becoming zero.
+### Runtime write result
 
-### Existing statusLine configuration
+- AI Limit Notifier itself wrote nothing to persistent disk during this validation; the only temporary artifact lived in `/dev/shm` (tmpfs/RAM) and was deleted after capture.
+- The user's own pre-existing `~/.claude/statusline-command.sh` and `~/.claude/settings.json` are unrelated, pre-existing, user-owned configuration — not AI Limit Notifier runtime state.
 
-During the later read-only inspection, `~/.claude/settings.json` already contained a command-based `statusLine` pointing to an existing `~/.claude/statusline-command.sh`.
+### Compatibility risk
 
-Read-only inspection of that existing script found that it already consumes the four fields required by AI Limit Notifier. No signs of network access or disk writes were found in that script during static inspection. The script was not modified.
+The statusLine JSON payload shape is not a publicly versioned/stable API contract from Anthropic. A production Claude adapter must:
 
-This is useful evidence for compatibility, but static script/binary inspection alone is not enough to mark the Claude reader safe.
+- be version-aware and fail closed (report `unknown`) rather than guess when fields are missing or reshaped;
+- never assume `statusLine` is configured — detect its absence and report `unsupported`/`needs setup` rather than silently falling back to another method;
+- never modify a user's existing statusLine command in a way that risks losing their prior configuration (install-time changes only, with plan/approval, per `docs/INSTALLER_CONTRACT.md`).
 
-### Passive capture attempt
-
-A user-approved temporary passive capture mechanism was armed with these constraints:
-
-- only `statusLine.command` was temporarily replaced;
-- the exact original `~/.claude/settings.json` bytes were backed up in `/dev/shm`;
-- temporary wrapper/collector/socket state existed only in `/dev/shm`;
-- no new Claude session, prompt, message, or model request was created for monitoring;
-- no monitoring instructions were added to model context;
-- no persistent AI Limit Notifier capture/history/cache/log state was written.
-
-No normal active Claude Code session produced a statusLine invocation during the test interval, so **no real statusLine stdin payload was observed**.
-
-The capture was therefore stopped without claiming success.
-
-### Rollback result
-
-The temporary configuration was safely rolled back:
-
-- `settings.json` restored byte-for-byte: **YES**;
-- original/final SHA-256 matched: **YES**;
-- original statusLine command restored: **YES**;
-- temporary `/dev/shm` backup/wrapper/socket removed: **YES**;
-- repository remained clean: **YES**.
-
-Observed restored file metadata during validation: mode `0644`, uid `1000`, gid `1000`.
-
-### Model/context result so far
-
-For the passive capture mechanism itself:
-
-- model request created by monitoring: **NO**;
-- model context added by monitoring: **NO**;
-- temporary capture network activity: **NONE by design/static inspection**;
-- notifier-owned persistent runtime writes: **NONE**.
-
-A normal active Claude Code session is still required to prove the runtime payload path end to end.
-
-### Compatibility risks
-
-For Claude Code `2.1.258` on this tested WSL2 environment:
-
-- rate-limit windows are optional;
-- rate-limit data appears only after a normal provider response and while the window is current;
-- statusLine is tied to an active/trusted Claude Code workspace/session;
-- exact invocation cadence has not yet been proven;
-- installed-version schema evidence must not be generalized to other Claude Code versions without version-aware compatibility handling.
-
-### Remaining proof required
-
-To complete Claude P0:
-
-1. use a normal active Claude Code session that the user would have run anyway;
-2. arm the same passive in-memory capture mechanism;
-3. observe a real statusLine JSON stdin payload after a natural Claude response;
-4. prove whether both `five_hour` and `seven_day` are present on the user's account at that moment;
-5. capture only the four required fields;
-6. normalize the observed values into `UsageSnapshot` without inventing missing windows;
-7. restore the original statusLine configuration byte-for-byte and verify its hash again.
-
-No prompt/session should be created solely to consume tokens for this validation.
-
-P0 is not complete until the Claude Code reader is proven with a real runtime capture for the declared v0.1 environment, or Claude Code is explicitly scoped out of v0.1 support.
+P0 is now closed for both providers in the tested environment: Codex CLI `0.152.1` and Claude Code `2.1.258` on Ubuntu 26.04 / WSL2.
