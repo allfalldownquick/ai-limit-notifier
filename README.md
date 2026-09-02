@@ -11,7 +11,8 @@ Zero-context usage monitoring and scheduled Telegram reset notifications for Cla
 - **Credentials stay local** — the hosted server receives only normalized usage percentages and reset timestamps, never Claude/OpenAI credentials, prompts, project files, or terminal contents.
 - **No remote execution** — the hosted server has no protocol for executing commands on connected devices.
 - **Telegram delivery** — notify a private bot chat or a configured Telegram channel.
-- **Self-hosted or hosted** — the public source is designed for both modes; an explicit software license still has to be selected before the first public release is called open-source.
+- **Self-hosted or hosted** — the public source is designed for both modes.
+- **Source-available licensing** — distributed under PolyForm Shield 1.0.0: ordinary use, modification, self-hosting and internal company use are allowed, while providing a competing product/service requires separate permission from the copyright holder.
 
 ## Easiest setup: let Claude Code or Codex inspect first
 
@@ -136,6 +137,23 @@ See:
 - [`docs/PROTOCOL_V1.md`](docs/PROTOCOL_V1.md) — pairing, device authentication and usage API contract.
 
 The first beta will not have unattended server-driven auto-updates. Those are deferred until release signing and rollback behavior are designed.
+
+## Licensing
+
+The project uses the **PolyForm Shield License 1.0.0**. See [`LICENSE`](LICENSE).
+
+The intent is simple:
+
+- ordinary personal use is allowed;
+- self-hosting is allowed;
+- modification is allowed;
+- internal company use is allowed when it does not provide a competing product/service;
+- a company that wants rights outside the public license can request separate terms from the copyright holder;
+- custom development/support for a company can also be negotiated independently of software licensing.
+
+See [`COMMERCIAL.md`](COMMERCIAL.md) for the practical company/commercial path. No public commercial tariff is fixed; any separate arrangement is individual.
+
+Because PolyForm Shield restricts competing use, this repository should be described as **source-available**, not OSI-approved open source.
 
 ## Development status
 
