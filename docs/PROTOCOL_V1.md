@@ -170,7 +170,7 @@ Implementation note (P3): the idempotency/combine key is scoped to the **user**,
 
 Default reset-notification rule:
 
-- create a durable reset notification when normalized usage reaches the configured threshold (default `80% used`);
+- the notification threshold (default `80% used`) is a purely local, per-device client setting (`ai-limit-notifier config threshold N`) — the agent simply does not submit a window below it, at all, so the server applies no percentage check of its own: any schema-valid, authenticated `/api/v1/usage` submission it receives creates/updates the durable reset notification;
 - schedule for `reset_at + 1 minute`;
 - repeat snapshots for the same reset window must not create duplicate scheduled notifications;
 - if a provider changes the reset timestamp, update the authoritative pending event carefully rather than blindly creating another notification.

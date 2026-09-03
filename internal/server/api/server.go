@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/store"
 )
 
@@ -42,14 +41,6 @@ type Server struct {
 	// reset_at values must be to produce one combined notification.
 	CombineWindow time.Duration
 
-	// Threshold is the used_percent at or above which a durable reset
-	// event is created (docs/PROTOCOL_V1.md's "default reset threshold is
-	// 80% used" — default, not hardcoded: an operator may configure a
-	// different value, but this field's own default is still 80). The
-	// server enforces this independently of whatever the client itself
-	// decided to submit.
-	Threshold float64
-
 	// PairingSecret keys pairing-code verifiers (see internal/server/auth's
 	// PairingCodeVerifier). Required for /api/v1/pair to work at all —
 	// New leaves it nil, and the handler fails closed until SetPairingSecret
@@ -66,7 +57,6 @@ func New(s *store.Store) *Server {
 	return &Server{
 		Store:          s,
 		CombineWindow:  defaultCombineWindow,
-		Threshold:      domain.DefaultScheduleThreshold,
 		pairingTTL:     defaultPairingTTL,
 		ipLimiter:      newIPLimiter(ipRateLimit, ipRateBurst),
 		deviceLimiter:  newDeviceLimiter(deviceRateLimit, deviceRateBurst),

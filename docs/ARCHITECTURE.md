@@ -84,9 +84,9 @@ Usage is normalized to `used_percent`.
 - Codex `20% left` => `80% used`.
 - Claude Code `80% usage` => `80% used`.
 
-Default reset notification threshold: 80% used.
+Default local notification threshold: 80% used, configurable per device (`ai-limit-notifier config threshold N`, `0 < N <= 100`) and stored only in that device's local static config — never on the server, never Telegram-managed.
 
-The local agent sends the current snapshot when required. The server determines whether a durable reset event must be created. This means a local restart can safely resend a snapshot; server-side idempotency prevents duplicate Telegram notifications.
+The threshold decision happens entirely on the device: below it, `monitor` makes no HTTP request to the server at all. The server applies no percentage gate of its own — any schema-valid, authenticated usage submission it does receive has, by construction, already crossed that device's local threshold, so the server always creates/updates the corresponding durable event. This means a local restart can safely resubmit the same (provider, window, reset_at) after the threshold is still crossed; server-side durable dedup (not a second threshold check) is what prevents a duplicate Telegram notification.
 
 Reset notifications are scheduled for `reset_at + 1 minute` by default.
 

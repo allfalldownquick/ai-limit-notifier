@@ -99,11 +99,15 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// No server-side percentage gate: an authenticated, schema-valid
+	// submission has already crossed the device's own local notification
+	// threshold (see cmd/ai-limit-notifier's `config threshold`) before the
+	// agent ever sent it. The server's job is auth, validation, durable
+	// dedup, and scheduling — not re-deciding whether the percentage
+	// "counts", which would just be a second, server-side threshold
+	// duplicating client-side config for no benefit.
 	for _, w2 := range []*domain.UsageWindow{snapshot.FiveHour, snapshot.Weekly} {
 		if w2 == nil {
-			continue
-		}
-		if !domain.ShouldScheduleReset(w2.UsedPercent, s.Threshold) {
 			continue
 		}
 		_, _, err := s.Store.UpsertPendingEvent(r.Context(), store.EventInput{

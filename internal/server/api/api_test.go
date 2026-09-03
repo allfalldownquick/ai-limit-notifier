@@ -253,24 +253,15 @@ func TestUsageRejectsWrongContentType(t *testing.T) {
 
 // --- EVENT / persistence behavior ----------------------------------------
 
-func TestUsageBelowThresholdCreatesNoEvent(t *testing.T) {
+// TestUsageAlwaysCreatesADurableEvent proves the server no longer applies
+// its own percentage gate (removed: threshold selection is now entirely a
+// client-side, local decision — see cmd/ai-limit-notifier's `config
+// threshold`). A schema-valid, authenticated submission at any used_percent,
+// including one that would have failed the old hardcoded 80% server
+// default, creates a durable event.
+func TestUsageAlwaysCreatesADurableEvent(t *testing.T) {
 	srv, s, _, token := newTestServer(t)
-	rec := doUsage(t, srv, token, validPayload(79))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	due, err := s.DueEvents(context.Background(), time.Now().Add(3*time.Hour), 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(due) != 0 {
-		t.Fatalf("79%% must not create a durable event, got %d", len(due))
-	}
-}
-
-func TestUsageAtThresholdCreatesOneDurableEvent(t *testing.T) {
-	srv, s, _, token := newTestServer(t)
-	rec := doUsage(t, srv, token, validPayload(80))
+	rec := doUsage(t, srv, token, validPayload(5))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -287,36 +278,7 @@ func TestUsageAtThresholdCreatesOneDurableEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(due) != 1 {
-		t.Fatalf("80%% must create exactly one durable event, got %d", len(due))
-	}
-}
-
-func TestUsageServerThresholdIsConfigurableAndIndependentOfClient(t *testing.T) {
-	srv, s, _, token := newTestServer(t)
-	srv.Threshold = 90 // stricter than the 80 default
-
-	rec := doUsage(t, srv, token, validPayload(85))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	due, err := s.DueEvents(context.Background(), time.Now().Add(3*time.Hour), 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(due) != 0 {
-		t.Fatalf("85%% must not cross a configured 90%% server threshold, got %d events", len(due))
-	}
-
-	rec = doUsage(t, srv, token, validPayload(95))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	due, err = s.DueEvents(context.Background(), time.Now().Add(3*time.Hour), 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(due) != 1 {
-		t.Fatalf("95%% must cross a configured 90%% server threshold, got %d events", len(due))
+		t.Fatalf("a valid submission at any percentage must create exactly one durable event, got %d", len(due))
 	}
 }
 

@@ -163,13 +163,10 @@ func TestP4FullLocalEndToEnd(t *testing.T) {
 
 	apiServer := api.New(st)
 	apiServer.SetPairingSecret(pairingSecret)
-	// The server independently enforces its own threshold regardless of
-	// what the client submits (by design — see internal/server/api's
-	// handleUsage). Lowered here only so this test doesn't depend on real
-	// live Codex usage happening to already be at/above the real 80%
-	// default at whatever moment it runs; the used_percent and reset_at
-	// that cross it are still 100% real values from a real Codex read.
-	apiServer.Threshold = 1
+	// The server itself no longer gates on used_percent at all — threshold
+	// selection is entirely local/client-side (see the `monitor --threshold
+	// 1` subprocess invocation below). Any schema-valid, authenticated
+	// submission creates a durable event.
 	apiHTTP := httptest.NewServer(apiServer.Handler())
 	defer apiHTTP.Close()
 
@@ -228,7 +225,8 @@ func TestP4FullLocalEndToEnd(t *testing.T) {
 	// 3. The real `monitor` subprocess: real Codex reader, real HTTPSink,
 	// picking up server_url + device_token entirely from the config `link`
 	// wrote — no manual token copying, matching the P4 goal statement.
-	// --threshold is lowered so today's real (possibly low) live Codex
+	// --threshold is an explicit one-run override of the local notification
+	// threshold (never persisted) so today's real (possibly low) live Codex
 	// usage still demonstrates the pipeline; the reset_at monitor submits
 	// is still the real one Codex reports.
 	monitorCmd := exec.Command(bin, "monitor", "--dry-run=false", "--codex-interval", "2s", "--threshold", "1")

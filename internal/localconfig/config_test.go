@@ -105,6 +105,64 @@ func TestSaveAtomicNoLeftoverTempFileOnSuccess(t *testing.T) {
 	}
 }
 
+// --- notification threshold ------------------------------------------
+
+func TestThresholdDefaultsTo80(t *testing.T) {
+	if got := (&Config{}).Threshold(); got != 80 {
+		t.Fatalf("zero-value Config.Threshold() = %v, want 80", got)
+	}
+	if got := (&Config{NotificationThreshold: 0}).Threshold(); got != DefaultNotificationThreshold {
+		t.Fatalf("explicit 0 must fall back to the default, got %v", got)
+	}
+}
+
+func TestThresholdOutOfRangeFallsBackToDefault(t *testing.T) {
+	for _, bad := range []float64{-1, 100.5, 101, 1000} {
+		if got := (&Config{NotificationThreshold: bad}).Threshold(); got != DefaultNotificationThreshold {
+			t.Fatalf("Config{NotificationThreshold: %v}.Threshold() = %v, want default %v", bad, got, DefaultNotificationThreshold)
+		}
+	}
+}
+
+func TestThresholdValidValuePassesThrough(t *testing.T) {
+	if got := (&Config{NotificationThreshold: 1}).Threshold(); got != 1 {
+		t.Fatalf("Threshold() = %v, want 1", got)
+	}
+	if got := (&Config{NotificationThreshold: 100}).Threshold(); got != 100 {
+		t.Fatalf("Threshold() = %v, want 100", got)
+	}
+}
+
+func TestThresholdPersistedAcrossSaveLoad(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	want := &Config{SchemaVersion: SchemaVersion, ServerURL: "https://example.com", NotificationThreshold: 1}
+	if err := Save(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Threshold() != 1 {
+		t.Fatalf("Threshold() after reload = %v, want 1", got.Threshold())
+	}
+
+	// 1 -> 80 -> back to 1, each persisted independently.
+	got.NotificationThreshold = DefaultNotificationThreshold
+	if err := Save(got); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Threshold() != DefaultNotificationThreshold {
+		t.Fatalf("Threshold() after second reload = %v, want %v", reloaded.Threshold(), DefaultNotificationThreshold)
+	}
+}
+
 func TestSaveFailureLeavesNoCredentialFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -36,6 +38,15 @@ import (
 )
 
 const readTimeout = 10 * time.Second
+
+// unsetThreshold is monitor's --threshold flag default. NaN rather than a
+// sentinel like -1: a real number (even an invalid one, like -1 or 0) is
+// something a user might actually type and expect a clear rejection for,
+// and -1 is exactly the kind of "obviously invalid" value someone would
+// try — colliding with it would make --threshold -1 silently behave as
+// "not given" instead of a validation error. NaN can't collide with a
+// float64 flag value in practice.
+var unsetThreshold = math.NaN()
 
 // clientVersion is reported to the server during pairing (docs/PROTOCOL_V1.md's
 // client_version field) — informational/diagnostic only, never trusted for
@@ -66,6 +77,8 @@ func main() {
 		code = runInstall(os.Args[2:])
 	case "link":
 		code = runLink(os.Args[2:])
+	case "config":
+		code = runConfig(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		code = 0
@@ -87,6 +100,8 @@ Commands:
   status              Concise current local state.
   monitor             Run the RAM-only monitoring agent (Codex polling + Claude socket).
   link CODE           Redeem a Telegram-issued pairing code and save the server link locally.
+  config              Show the local notification threshold.
+  config threshold N  Set the local notification threshold (0 < N <= 100; default 80).
   statusline-wrapper  Claude Code statusLine chaining wrapper (installed, not run by hand).
   install --plan      Show the Claude statusLine wrapper installation plan (read-only).`)
 }
@@ -287,12 +302,123 @@ func runDoctor(args []string) int {
 
 	fmt.Println("local runtime persistence: disabled (no usage/history/cache/log files written)")
 
+	cfg, cfgErr := localconfig.Load()
+	switch {
+	case cfgErr != nil:
+		fmt.Println("link config: FAIL (local config unreadable/malformed)")
+		ok = false
+	case cfg.DeviceToken == "" || cfg.ServerURL == "":
+		fmt.Println("link config: not linked (run `ai-limit-notifier link <CODE>`)")
+	default:
+		fmt.Println("link config: linked")
+		client := doctorHTTPClient()
+
+		if health, err := fetchHealth(ctx, client, cfg.ServerURL); err != nil {
+			fmt.Printf("server reachability: FAIL (%v)\n", err)
+			fmt.Println("protocol compatibility: unknown (server unreachable)")
+			ok = false
+		} else {
+			fmt.Println("server reachability: OK")
+			if health.ProtocolVersion == doctorProtocolVersion {
+				fmt.Printf("protocol compatibility: OK (server=%d, client=%d)\n", health.ProtocolVersion, doctorProtocolVersion)
+			} else {
+				fmt.Printf("protocol compatibility: MISMATCH (server=%d, client=%d)\n", health.ProtocolVersion, doctorProtocolVersion)
+				ok = false
+			}
+		}
+
+		switch valid, err := fetchDeviceValid(ctx, client, cfg.ServerURL, cfg.DeviceToken); {
+		case err != nil:
+			fmt.Printf("device credential: FAIL (%v)\n", err)
+			ok = false
+		case !valid:
+			fmt.Println("device credential: REVOKED or INVALID (server rejected it — run `ai-limit-notifier link <CODE>` again)")
+			ok = false
+		default:
+			fmt.Println("device credential: valid")
+		}
+	}
+
 	if ok {
 		fmt.Println("result: OK")
 		return 0
 	}
 	fmt.Println("result: one or more checks failed")
 	return 1
+}
+
+// doctorProtocolVersion mirrors docs/PROTOCOL_V1.md's schema_version, the
+// same number internal/sink and internal/server/api independently define
+// locally rather than share via an import (client and server are
+// deliberately separate products — see docs/INSTALLER_CONTRACT.md).
+const doctorProtocolVersion = 1
+
+func doctorHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: readTimeout,
+		// Same redirect policy as internal/sink and pairWithServer: a
+		// bearer token must never be forwarded to a redirect target this
+		// diagnostic didn't choose.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+type doctorHealthWire struct {
+	ProtocolVersion int `json:"protocol_version"`
+}
+
+// fetchHealth calls the server's unauthenticated /healthz -- reachability
+// and protocol compatibility only, no credential involved.
+func fetchHealth(ctx context.Context, client *http.Client, serverURL string) (doctorHealthWire, error) {
+	var out doctorHealthWire
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(serverURL, "/")+"/healthz", nil)
+	if err != nil {
+		return out, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+	if err != nil {
+		return out, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return out, fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("malformed response: %w", err)
+	}
+	return out, nil
+}
+
+// fetchDeviceValid checks the device credential against the server's
+// authenticated /api/v1/status. A (false, nil) return means the server
+// affirmatively rejected the credential (401 -- revoked or invalid),
+// distinct from a transport/protocol failure, which comes back as an error.
+func fetchDeviceValid(ctx context.Context, client *http.Client, serverURL, token string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(serverURL, "/")+"/api/v1/status", nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8*1024))
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusUnauthorized:
+		return false, nil
+	default:
+		return false, fmt.Errorf("server returned %d", resp.StatusCode)
+	}
 }
 
 func windowStatus(w *domain.UsageWindow) string {
@@ -373,7 +499,8 @@ func runStatus(args []string) int {
 	} else {
 		fmt.Println("Agent: not running")
 	}
-	fmt.Println("Linked: not implemented (P3/P4)")
+	printLinkStatus()
+	printThreshold()
 
 	r := codex.New()
 	if snap, err := r.Read(ctx); err != nil {
@@ -393,37 +520,46 @@ func runStatus(args []string) int {
 	}
 
 	fmt.Println("Local runtime persistence: disabled")
-	fmt.Println("Server: not implemented (P3)")
 
 	return 0
 }
 
+// printLinkStatus reports link state from the saved config only -- what
+// `ai-limit-notifier link` last wrote, read-only -- and never the device
+// token's value, only whether one is present.
+func printLinkStatus() {
+	cfg, err := localconfig.Load()
+	switch {
+	case err != nil:
+		fmt.Println("Linked: unknown (local config unreadable — run `ai-limit-notifier doctor` for details)")
+	case cfg.DeviceToken == "" || cfg.ServerURL == "":
+		fmt.Println("Linked: no")
+	default:
+		fmt.Println("Linked: yes")
+		fmt.Println("Device: configured")
+		fmt.Printf("Server: %s\n", cfg.ServerURL)
+	}
+}
+
 // --- monitor ---------------------------------------------------------------
 
-// printSink is the only Sink that exists before P3: it prints what would be
-// (or, once a real server exists, will be) delivered. It never writes to
-// disk, so both modes satisfy "no persistent runtime state" — --dry-run
-// only changes the label, since there is nothing else to send to yet.
+// printSink is the --dry-run destination: it only ever prints what would be
+// sent, never writes to disk, and never contacts a server.
 type printSink struct {
-	w      io.Writer
-	dryRun bool
+	w io.Writer
 }
 
 func (s *printSink) Send(_ context.Context, ev agent.Event) error {
-	label := "would send"
-	if !s.dryRun {
-		label = "observed (no server configured yet — P3)"
-	}
-	fmt.Fprintf(s.w, "[%s] %s %s: %.0f%% used, resets %s\n",
-		label, ev.Provider, ev.Window, ev.UsedPercent, ev.ResetAt.UTC().Format(time.RFC3339))
+	fmt.Fprintf(s.w, "[would send] %s %s: %.0f%% used, resets %s\n",
+		ev.Provider, ev.Window, ev.UsedPercent, ev.ResetAt.UTC().Format(time.RFC3339))
 	return nil
 }
 
 func runMonitor(args []string) int {
 	fs := flag.NewFlagSet("monitor", flag.ContinueOnError)
 	codexInterval := fs.Duration("codex-interval", 5*time.Minute, "bounded Codex polling interval (clamped to a minimum)")
-	threshold := fs.Float64("threshold", domain.DefaultScheduleThreshold, "used_percent threshold that schedules a reset event")
-	dryRun := fs.Bool("dry-run", true, "show would-be events only; never send to a configured server")
+	threshold := fs.Float64("threshold", unsetThreshold, "override the local notification threshold for this run only (not saved); default: use `ai-limit-notifier config`'s saved value")
+	dryRun := fs.Bool("dry-run", false, "never contact a server; print would-be events only")
 	serverURL := fs.String("server-url", "", "hosted/self-hosted server base URL (e.g. https://api.example.com); requires AI_LIMIT_NOTIFIER_DEVICE_TOKEN")
 	if err := fs.Parse(args); err != nil {
 		return 3
@@ -433,34 +569,36 @@ func runMonitor(args []string) int {
 	defer stop()
 
 	// Precedence for the server URL: explicit flag > environment > saved
-	// `link` config > (dry-run/no server). The device token never comes
-	// from a flag (it would appear in `ps`/shell history) — only
-	// environment or the config `link` wrote, environment taking
-	// precedence so an operator can override the config without editing it.
+	// `link` config. The device token never comes from a flag (it would
+	// appear in `ps`/shell history) — only environment or the config
+	// `link` wrote, environment taking precedence so an operator can
+	// override the config without editing it.
+	//
+	// Semantics are deliberately unambiguous, no silent fallback between
+	// them: --dry-run never sends, regardless of what's configured; a
+	// configured server without --dry-run always sends; no configured
+	// server without --dry-run is a fail-closed error, not a quiet
+	// downgrade to dry-run (a plain `monitor` after `link` must actually
+	// report, or plainly refuse to run).
 	resolvedServerURL := resolveServerURL(*serverURL)
 
-	var core *agent.Core
-	switch {
-	case *dryRun || resolvedServerURL == "":
-		if resolvedServerURL != "" {
-			fmt.Println("monitor: --dry-run set; ignoring the configured server and printing would-be events instead")
-		}
-		core = agent.NewCore(&printSink{w: os.Stdout, dryRun: true}, *threshold)
-		fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s dry-run=true\n", *threshold, *codexInterval)
-	default:
-		token := resolveDeviceToken()
-		if token == "" {
-			fmt.Fprintln(os.Stderr, "monitor: a server is configured but no device token was found (AI_LIMIT_NOTIFIER_DEVICE_TOKEN, or run `ai-limit-notifier link CODE` first)")
-			return 3
-		}
-		httpSink, err := sink.New(resolvedServerURL, token)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "monitor: %v\n", err)
-			return 3
-		}
-		core = agent.NewCore(httpSink, *threshold)
-		fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s server=%s\n", *threshold, *codexInterval, resolvedServerURL)
+	if !math.IsNaN(*threshold) && (*threshold <= 0 || *threshold > 100) {
+		// domain.ShouldScheduleReset silently treats threshold<=0 (and
+		// >100) as "never schedule" rather than "always" — an explicit
+		// --threshold 0 would otherwise look like it's running but never
+		// send anything, with no error anywhere. Reject it here instead.
+		fmt.Fprintln(os.Stderr, "monitor: --threshold must be a number > 0 and <= 100")
+		return 3
 	}
+
+	monitorSink, statusLine, err := resolveMonitorSink(*dryRun, resolvedServerURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "monitor: %v\n", err)
+		return 3
+	}
+	effectiveThreshold := resolveMonitorThreshold(*threshold)
+	core := agent.NewCore(monitorSink, effectiveThreshold)
+	fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s %s\n", effectiveThreshold, *codexInterval, statusLine)
 
 	fmt.Println("monitor: local runtime persistence disabled; all state is in RAM")
 
@@ -483,6 +621,46 @@ func runMonitor(args []string) int {
 	fmt.Println("monitor: shutting down")
 	wg.Wait()
 	return 0
+}
+
+// resolveMonitorSink is monitor's fail-closed sink selection, split out
+// from runMonitor so it can be tested without spinning up the blocking
+// poll/serve loop. dryRun never sends, regardless of resolvedServerURL; an
+// empty resolvedServerURL without dryRun is a fail-closed error rather than
+// a silent downgrade to dry-run; a configured server without dryRun always
+// sends (missing device token is an error, not a fallback either).
+func resolveMonitorSink(dryRun bool, resolvedServerURL string) (agent.Sink, string, error) {
+	if dryRun {
+		return &printSink{w: os.Stdout}, "dry-run=true", nil
+	}
+	if resolvedServerURL == "" {
+		return nil, "", errors.New("not linked; run `ai-limit-notifier link <CODE>` or use --dry-run")
+	}
+	token := resolveDeviceToken()
+	if token == "" {
+		return nil, "", errors.New("a server is configured but no device token was found (AI_LIMIT_NOTIFIER_DEVICE_TOKEN, or run `ai-limit-notifier link CODE` first)")
+	}
+	httpSink, err := sink.New(resolvedServerURL, token)
+	if err != nil {
+		return nil, "", err
+	}
+	return httpSink, "server=" + resolvedServerURL, nil
+}
+
+// resolveMonitorThreshold implements --threshold's override semantics: an
+// explicit flag value (anything but the unsetThreshold sentinel) wins for
+// this run only and is never saved; otherwise the saved local config's
+// threshold applies (falling back to the default on a missing/malformed
+// config, same as every other config-reading helper in this file).
+func resolveMonitorThreshold(flagValue float64) float64 {
+	if !math.IsNaN(flagValue) {
+		return flagValue
+	}
+	cfg, err := localconfig.Load()
+	if err != nil {
+		return localconfig.DefaultNotificationThreshold
+	}
+	return cfg.Threshold()
 }
 
 // --- link ------------------------------------------------------------------
@@ -524,11 +702,21 @@ func runLink(args []string) int {
 		return 1
 	}
 
+	// A relink must not silently reset a previously configured
+	// notification threshold: carry it forward if a config already exists
+	// (a fresh Load on any error just yields the zero value, which
+	// Threshold() already treats as "unset" — same as a brand-new device).
+	var priorThreshold float64
+	if existing, err := localconfig.Load(); err == nil {
+		priorThreshold = existing.NotificationThreshold
+	}
+
 	cfg := &localconfig.Config{
-		SchemaVersion: localconfig.SchemaVersion,
-		ServerURL:     serverURL,
-		DeviceID:      deviceID,
-		DeviceToken:   token,
+		SchemaVersion:         localconfig.SchemaVersion,
+		ServerURL:             serverURL,
+		DeviceID:              deviceID,
+		DeviceToken:           token,
+		NotificationThreshold: priorThreshold,
 	}
 	if err := localconfig.Save(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "link: failed to save local config: %v\n", err)
@@ -622,6 +810,58 @@ func pairWithServer(ctx context.Context, serverURL, code string) (deviceID, toke
 
 func isLoopbackHostname(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+// --- config ------------------------------------------------------------
+
+// runConfig is deliberately narrow: today the only setting is the local
+// notification threshold. `config` alone shows it (safe: never touches the
+// device token); `config threshold N` sets it. Does not require an existing
+// link — a threshold-only config is valid, and `link` never overwrites it
+// (see runLink, which preserves it across a relink).
+func runConfig(args []string) int {
+	if len(args) == 0 {
+		printThreshold()
+		return 0
+	}
+	if args[0] != "threshold" {
+		fmt.Fprintln(os.Stderr, "usage: ai-limit-notifier config [threshold N]")
+		return 3
+	}
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: ai-limit-notifier config threshold N")
+		return 3
+	}
+	n, err := strconv.ParseFloat(args[1], 64)
+	if err != nil || n <= 0 || n > 100 {
+		fmt.Fprintln(os.Stderr, "config: threshold must be a number > 0 and <= 100")
+		return 3
+	}
+
+	cfg, err := localconfig.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: local config unreadable/malformed: %v\n", err)
+		return 1
+	}
+	cfg.NotificationThreshold = n
+	if cfg.SchemaVersion == 0 {
+		cfg.SchemaVersion = localconfig.SchemaVersion
+	}
+	if err := localconfig.Save(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "config: failed to save local config: %v\n", err)
+		return 1
+	}
+	fmt.Printf("config: notification threshold set to %.0f%%\n", n)
+	return 0
+}
+
+func printThreshold() {
+	cfg, err := localconfig.Load()
+	if err != nil {
+		fmt.Println("Notification threshold: unknown (local config unreadable — run `ai-limit-notifier doctor` for details)")
+		return
+	}
+	fmt.Printf("Notification threshold: %.0f%%\n", cfg.Threshold())
 }
 
 // --- statusline-wrapper ------------------------------------------------

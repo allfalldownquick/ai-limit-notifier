@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/api"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/delivery"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/scheduler"
@@ -86,7 +85,6 @@ func runServe(args []string) int {
 	dbPath := fs.String("db", "ai-limit-server.db", "SQLite database path")
 	combineWindow := fs.Duration("combine-window", 10*time.Minute, "max reset_at gap to combine same-window-kind, different-provider events")
 	pollInterval := fs.Duration("poll-interval", 5*time.Second, "scheduler poll interval")
-	threshold := fs.Float64("threshold", domain.DefaultScheduleThreshold, "used_percent at/above which a durable reset event is created (docs/PROTOCOL_V1.md's default is 80)")
 	var trustedProxies stringSliceFlag
 	fs.Var(&trustedProxies, "trusted-proxy", "CIDR of a reverse proxy allowed to set X-Forwarded-For (repeatable; none trusted by default)")
 	if err := fs.Parse(args); err != nil {
@@ -124,7 +122,6 @@ func runServe(args []string) int {
 
 	apiServer := api.New(st)
 	apiServer.CombineWindow = *combineWindow
-	apiServer.Threshold = *threshold
 	apiServer.SetPairingSecret([]byte(pairingSecret))
 	if err := apiServer.SetTrustedProxies(trustedProxies); err != nil {
 		fmt.Fprintf(os.Stderr, "serve: %v\n", err)

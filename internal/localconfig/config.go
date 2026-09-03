@@ -19,15 +19,38 @@ import (
 // (or vice versa) config file.
 const SchemaVersion = 1
 
+// DefaultNotificationThreshold applies whenever NotificationThreshold is
+// unset — including every config written before this field existed, since
+// a missing/zero JSON field decodes to 0, outside the valid (0, 100] range.
+const DefaultNotificationThreshold = 80
+
 // Config is deliberately narrow: nothing here is monitored usage, reset
-// history, a provider payload, a prompt, or a Claude/OpenAI credential —
-// only what's needed to reconnect to the already-paired server after a
-// reboot.
+// history, a provider payload, or a Claude/OpenAI credential — only static,
+// install-time settings: what's needed to reconnect to the already-paired
+// server after a reboot, plus the local notification threshold.
 type Config struct {
 	SchemaVersion int    `json:"schema_version"`
 	ServerURL     string `json:"server_url"`
 	DeviceID      string `json:"device_id"`
 	DeviceToken   string `json:"device_token"`
+
+	// NotificationThreshold is the used_percent at/above which `monitor`
+	// sends an observation at all — the only threshold in the system (see
+	// docs/ARCHITECTURE.md): the server no longer applies one of its own.
+	// 0 (including an absent field, from `link`-only configs or ones
+	// written before this field existed) means "unset" and falls back to
+	// DefaultNotificationThreshold via Threshold(), never literal 0.
+	NotificationThreshold float64 `json:"notification_threshold,omitempty"`
+}
+
+// Threshold returns NotificationThreshold if it's a valid setting, else
+// DefaultNotificationThreshold. Centralizing the fallback here means every
+// reader (status, monitor) agrees on what an unset/legacy config means.
+func (c *Config) Threshold() float64 {
+	if c.NotificationThreshold <= 0 || c.NotificationThreshold > 100 {
+		return DefaultNotificationThreshold
+	}
+	return c.NotificationThreshold
 }
 
 // Path resolves the config file location following XDG convention:
