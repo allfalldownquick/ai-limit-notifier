@@ -8,8 +8,8 @@ import (
 
 func TestIPLimiterEvictsStaleEntries(t *testing.T) {
 	l := newIPLimiter(10, 10)
-	l.allow("1.2.3.4:1111")
-	l.allow("5.6.7.8:2222")
+	l.allow("1.2.3.4")
+	l.allow("5.6.7.8")
 	if got := l.size(); got != 2 {
 		t.Fatalf("size = %d, want 2", got)
 	}
@@ -23,7 +23,7 @@ func TestIPLimiterEvictsStaleEntries(t *testing.T) {
 	l.lastSweep = time.Now().Add(-2 * ipLimiterSweepEvery)
 	l.mu.Unlock()
 
-	l.allow("9.9.9.9:3333") // triggers a sweep as a side effect, then adds itself
+	l.allow("9.9.9.9") // triggers a sweep as a side effect, then adds itself
 	if got := l.size(); got != 1 {
 		t.Fatalf("size after sweep = %d, want 1 (only the fresh entry should remain)", got)
 	}
@@ -31,13 +31,13 @@ func TestIPLimiterEvictsStaleEntries(t *testing.T) {
 
 func TestIPLimiterFreshEntriesSurviveSweep(t *testing.T) {
 	l := newIPLimiter(10, 10)
-	l.allow("1.2.3.4:1111")
+	l.allow("1.2.3.4")
 
 	l.mu.Lock()
 	l.lastSweep = time.Now().Add(-2 * ipLimiterSweepEvery) // force a sweep, but entry is still fresh
 	l.mu.Unlock()
 
-	l.allow("1.2.3.4:1111")
+	l.allow("1.2.3.4")
 	if got := l.size(); got != 1 {
 		t.Fatalf("a recently-seen entry must survive a sweep, size = %d", got)
 	}
@@ -48,7 +48,7 @@ func TestIPLimiterHardCapFailsClosedForNewAddresses(t *testing.T) {
 	l.max = 3
 
 	for i := 0; i < 3; i++ {
-		addr := fmt.Sprintf("10.0.0.%d:1234", i)
+		addr := fmt.Sprintf("10.0.0.%d", i)
 		if !l.allow(addr) {
 			t.Fatalf("address %d should have been allowed under the cap", i)
 		}
@@ -57,7 +57,7 @@ func TestIPLimiterHardCapFailsClosedForNewAddresses(t *testing.T) {
 		t.Fatalf("size = %d, want 3", got)
 	}
 
-	if l.allow("10.0.0.99:1234") {
+	if l.allow("10.0.0.99") {
 		t.Fatal("a brand-new address beyond the hard cap must be rejected, not silently grow the map")
 	}
 	if got := l.size(); got != 3 {
@@ -66,7 +66,7 @@ func TestIPLimiterHardCapFailsClosedForNewAddresses(t *testing.T) {
 
 	// An address already tracked must still be rate-limited normally even
 	// while at the cap (the cap only blocks *new* entries).
-	if !l.allow("10.0.0.0:1234") {
+	if !l.allow("10.0.0.0") {
 		t.Fatal("an existing tracked address should still be allowed under its own limiter while at the cap")
 	}
 }

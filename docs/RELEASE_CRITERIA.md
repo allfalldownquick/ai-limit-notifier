@@ -66,10 +66,10 @@ Do not publish a stable/usable release until every required item below is verifi
 
 ## Pairing
 
-- [ ] `/start` onboarding is understandable without reading architecture documentation.
-- [ ] Pairing codes expire, are single-use, and are protected against guessing abuse.
-- [ ] Pairing never requires pasting Claude/OpenAI credentials into Telegram.
-- [ ] Device revocation immediately prevents future authenticated submissions from that device credential.
+- [x] `/start` onboarding is understandable without reading architecture documentation. The bot's reply is exactly: "AI Limit Notifier / Connection code: CODE / On your computer, run: ai-limit-notifier link CODE / The code is valid for 10 minutes and works once." Verified by tests that this exact text (and the runnable command) is what `/start` actually sends; not yet verified with a real, unguided end user.
+- [x] Pairing codes expire, are single-use, and are protected against guessing abuse. ~50-bit entropy, 10-minute TTL, atomic one-use claim proven under real concurrent redemption attempts, per-IP rate limiting on the endpoint. Tested extensively at the store and API layers.
+- [x] Pairing never requires pasting Claude/OpenAI credentials into Telegram. No bot command or server response ever asks for one; the pairing request schema has no field that could carry one.
+- [x] Device revocation immediately prevents future authenticated submissions from that device credential. Tested end to end through the real bot command path: `/revoke` on a caller's own device, then the exact same raw token immediately fails `AuthenticateDevice` (`TestRevokeOwnDeviceRejectsTokenImmediately`), while another user's devices and other devices of the same user remain unaffected.
 
 ## Code quality
 

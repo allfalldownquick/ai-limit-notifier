@@ -47,3 +47,20 @@ type statusResponse struct {
 	DeviceValid     bool   `json:"device_valid"`
 	ServerTime      string `json:"server_time"`
 }
+
+// pairRequest mirrors exactly docs/PROTOCOL_V1.md's pairing exchange —
+// nothing else. No Telegram id, no user id, no destination/text/url/path
+// ever appears here; the server resolves the user from the pairing code
+// itself (see Store.RedeemPairingCode), never from anything the client
+// supplies.
+type pairRequest struct {
+	Code          string `json:"code"`
+	ClientVersion string `json:"client_version"`
+	Platform      string `json:"platform"`
+}
+
+type pairResponse struct {
+	Linked      bool   `json:"linked"`
+	DeviceID    string `json:"device_id"`
+	DeviceToken string `json:"device_token"`
+}

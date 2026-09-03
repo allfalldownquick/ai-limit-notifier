@@ -47,6 +47,11 @@ func NewTelegramDelivery(botToken string) *TelegramDelivery {
 	}
 }
 
+// SetAPIBase points this delivery at a different Telegram API base URL —
+// for tests, so a fake server can stand in without ever calling the real
+// API. Production code has no reason to call this.
+func (t *TelegramDelivery) SetAPIBase(base string) { t.apiBase = base }
+
 type sendMessageRequest struct {
 	ChatID string `json:"chat_id"`
 	Text   string `json:"text"`

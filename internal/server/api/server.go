@@ -11,11 +11,13 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/store"
 )
 
 const (
 	defaultCombineWindow  = 10 * time.Minute
+	defaultPairingTTL     = 10 * time.Minute
 	maxConcurrentHandlers = 64
 
 	// Per-device: generous for a monitor process polling every 30s+, tight
@@ -23,7 +25,9 @@ const (
 	deviceRateLimit = rate.Limit(1) // 1 req/s sustained
 	deviceRateBurst = 5
 
-	// Per-IP: mainly a brake on repeated bad-token guessing.
+	// Per-IP: mainly a brake on repeated bad-token guessing. /api/v1/pair
+	// shares this limiter — it's unauthenticated by nature, so this is its
+	// only per-request brake besides the code's own entropy/TTL/one-use.
 	ipRateLimit = rate.Limit(2)
 	ipRateBurst = 10
 )
@@ -38,17 +42,54 @@ type Server struct {
 	// reset_at values must be to produce one combined notification.
 	CombineWindow time.Duration
 
-	ipLimiter     *ipLimiter
-	deviceLimiter *deviceLimiter
+	// Threshold is the used_percent at or above which a durable reset
+	// event is created (docs/PROTOCOL_V1.md's "default reset threshold is
+	// 80% used" — default, not hardcoded: an operator may configure a
+	// different value, but this field's own default is still 80). The
+	// server enforces this independently of whatever the client itself
+	// decided to submit.
+	Threshold float64
+
+	// PairingSecret keys pairing-code verifiers (see internal/server/auth's
+	// PairingCodeVerifier). Required for /api/v1/pair to work at all —
+	// New leaves it nil, and the handler fails closed until SetPairingSecret
+	// is called.
+	pairingSecret []byte
+	pairingTTL    time.Duration
+
+	ipLimiter      *ipLimiter
+	deviceLimiter  *deviceLimiter
+	trustedProxies *trustedProxies
 }
 
 func New(s *store.Store) *Server {
 	return &Server{
-		Store:         s,
-		CombineWindow: defaultCombineWindow,
-		ipLimiter:     newIPLimiter(ipRateLimit, ipRateBurst),
-		deviceLimiter: newDeviceLimiter(deviceRateLimit, deviceRateBurst),
+		Store:          s,
+		CombineWindow:  defaultCombineWindow,
+		Threshold:      domain.DefaultScheduleThreshold,
+		pairingTTL:     defaultPairingTTL,
+		ipLimiter:      newIPLimiter(ipRateLimit, ipRateBurst),
+		deviceLimiter:  newDeviceLimiter(deviceRateLimit, deviceRateBurst),
+		trustedProxies: &trustedProxies{},
 	}
+}
+
+// SetPairingSecret configures the key /api/v1/pair uses to verify pairing
+// codes. Must be called before the endpoint is used; see cmd/ai-limit-server,
+// which fails closed at startup if the secret isn't configured.
+func (s *Server) SetPairingSecret(secret []byte) { s.pairingSecret = secret }
+
+// SetTrustedProxies configures which immediate TCP peers are trusted to
+// supply an accurate X-Forwarded-For header (see clientIP). Called with an
+// empty/nil list, nothing is trusted and X-Forwarded-For is always ignored
+// — the default from New.
+func (s *Server) SetTrustedProxies(cidrs []string) error {
+	tp, err := parseTrustedProxies(cidrs)
+	if err != nil {
+		return err
+	}
+	s.trustedProxies = tp
+	return nil
 }
 
 // Handler builds the routed, middleware-wrapped http.Handler. Uses the
@@ -59,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/status", s.requireAuth(s.handleStatus))
 	mux.HandleFunc("POST /api/v1/usage", s.requireAuth(s.handleUsage))
+	mux.HandleFunc("POST /api/v1/pair", s.rateLimitByIP(s.handlePair))
 
 	return concurrencyLimit(maxConcurrentHandlers)(mux)
 }

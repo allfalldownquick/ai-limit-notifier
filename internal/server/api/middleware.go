@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -86,11 +85,9 @@ func newIPLimiter(r rate.Limit, b int) *ipLimiter {
 	}
 }
 
-func (l *ipLimiter) allow(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
+// allow takes an already-resolved client host (no port) — see Server.clientIP,
+// which is what every caller uses to get one.
+func (l *ipLimiter) allow(host string) bool {
 	now := time.Now()
 
 	l.mu.Lock()
@@ -157,7 +154,7 @@ func (l *deviceLimiter) allow(deviceID string) bool {
 // generic 401 so a client can't distinguish those cases.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.ipLimiter.allow(r.RemoteAddr) {
+		if !s.ipLimiter.allow(s.clientIP(r)) {
 			writeError(w, http.StatusTooManyRequests, "rate_limited", "")
 			return
 		}
@@ -181,6 +178,18 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		ctx := context.WithValue(r.Context(), deviceContextKey{}, device)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+// rateLimitByIP applies only the pre-auth IP limiter — for endpoints like
+// /api/v1/pair that have no device/bearer token to check yet.
+func (s *Server) rateLimitByIP(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.ipLimiter.allow(s.clientIP(r)) {
+			writeError(w, http.StatusTooManyRequests, "rate_limited", "")
+			return
+		}
+		next.ServeHTTP(w, r)
 	}
 }
 

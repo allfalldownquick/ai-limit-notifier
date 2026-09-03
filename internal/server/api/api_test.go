@@ -291,6 +291,35 @@ func TestUsageAtThresholdCreatesOneDurableEvent(t *testing.T) {
 	}
 }
 
+func TestUsageServerThresholdIsConfigurableAndIndependentOfClient(t *testing.T) {
+	srv, s, _, token := newTestServer(t)
+	srv.Threshold = 90 // stricter than the 80 default
+
+	rec := doUsage(t, srv, token, validPayload(85))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	due, err := s.DueEvents(context.Background(), time.Now().Add(3*time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("85%% must not cross a configured 90%% server threshold, got %d events", len(due))
+	}
+
+	rec = doUsage(t, srv, token, validPayload(95))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	due, err = s.DueEvents(context.Background(), time.Now().Add(3*time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("95%% must cross a configured 90%% server threshold, got %d events", len(due))
+	}
+}
+
 func TestUsageRetrySamePayloadIsIdempotent(t *testing.T) {
 	srv, s, _, token := newTestServer(t)
 	body := validPayload(85)

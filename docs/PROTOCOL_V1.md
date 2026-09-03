@@ -38,11 +38,13 @@ Content-Type: application/json
 
 ```json
 {
-  "code": "K7F4-X2QM",
+  "code": "K7F4-X2QM-JH",
   "client_version": "0.1.0-beta.1",
   "platform": "linux-wsl-amd64"
 }
 ```
+
+Implementation note (P4): the code is 10 characters of Crockford Base32 (`0-9`, `A-Z` minus `I`/`L`/`O`/`U`, so no character is ambiguous with a digit or another letter), formatted `XXXX-XXXX-XX` — exactly 50 bits of entropy. The server never stores the plaintext code, only `HMAC-SHA256(pairing_secret, normalized_code)`, where `pairing_secret` is a separate server-side secret (`AI_LIMIT_NOTIFIER_PAIRING_SECRET`) that never touches the database — a bare hash would be offline-brute-forceable given only a database copy, since a human-enterable code has far less entropy than a device token. Consuming a code and issuing its device are one atomic transaction (a conditional `UPDATE ... WHERE consumed_at IS NULL`, the same claim pattern the scheduler uses for event delivery); two concurrent redemptions of the same code always resolve to exactly one winner. Unknown, expired, already-consumed, and "lost the race" all return the identical response, so the endpoint is not a code-guessing oracle.
 
 The server verifies the code and returns a newly generated device identity/credential exactly for that linked device.
 
@@ -199,6 +201,8 @@ After revocation:
 - future submissions are rejected;
 - no server-to-device cleanup command is sent;
 - local uninstall/relink is a separate user-initiated action.
+
+Implementation note (P4): revocation is a bot command, `/revoke <device-id>`, alongside `/devices` (lists only the requesting Telegram user's own devices — id, active/revoked, linked date; never a token) and `/start` (issues a pairing code). A user can only revoke a device resolved to belong to their own `telegram_user_id`; attempting to revoke another user's device id returns the same response as a nonexistent one, so `/revoke` can't be used to probe for other users' device ids.
 
 ## Status/health
 

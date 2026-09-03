@@ -74,3 +74,62 @@ func (s *Store) RevokeDevice(ctx context.Context, deviceID string) error {
 	)
 	return err
 }
+
+// ListDevicesForUser returns every device (active or revoked) belonging to
+// userID, newest first. It never returns a token — this package never
+// reads token_hash back after CreateDevice/RedeemPairingCode write it.
+func (s *Store) ListDevicesForUser(ctx context.Context, userID string) ([]Device, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_id, created_at, revoked_at FROM devices WHERE user_id = ? ORDER BY created_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var devices []Device
+	for rows.Next() {
+		var d Device
+		var createdAt int64
+		var revokedAt sql.NullInt64
+		if err := rows.Scan(&d.ID, &d.UserID, &createdAt, &revokedAt); err != nil {
+			return nil, err
+		}
+		d.CreatedAt = time.Unix(createdAt, 0).UTC()
+		if revokedAt.Valid {
+			t := time.Unix(revokedAt.Int64, 0).UTC()
+			d.RevokedAt = &t
+		}
+		devices = append(devices, d)
+	}
+	return devices, rows.Err()
+}
+
+// ErrDeviceNotOwnedByUser is returned by RevokeDeviceForUser when deviceID
+// doesn't belong to userID — including when it doesn't exist at all. The
+// two cases are deliberately indistinguishable, so a Telegram user can't
+// use /revoke to probe for other users' device ids.
+var ErrDeviceNotOwnedByUser = errors.New("device not found for this user")
+
+// RevokeDeviceForUser revokes deviceID only if it belongs to userID.
+// Revoking an already-revoked device of your own is still a success
+// (idempotent, matching RevokeDevice).
+func (s *Store) RevokeDeviceForUser(ctx context.Context, userID, deviceID string) error {
+	var owner string
+	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM devices WHERE id = ?`, deviceID).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrDeviceNotOwnedByUser
+	}
+	if err != nil {
+		return err
+	}
+	if owner != userID {
+		return ErrDeviceNotOwnedByUser
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
+		time.Now().UTC().Unix(), deviceID,
+	)
+	return err
+}

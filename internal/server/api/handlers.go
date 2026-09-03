@@ -103,7 +103,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		if w2 == nil {
 			continue
 		}
-		if !domain.ShouldScheduleReset(w2.UsedPercent, domain.DefaultScheduleThreshold) {
+		if !domain.ShouldScheduleReset(w2.UsedPercent, s.Threshold) {
 			continue
 		}
 		_, _, err := s.Store.UpsertPendingEvent(r.Context(), store.EventInput{

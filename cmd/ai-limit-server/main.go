@@ -12,14 +12,27 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/api"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/delivery"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/scheduler"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/server/store"
+	"github.com/allfalldownquick/ai-limit-notifier/internal/server/telegrambot"
 )
+
+// stringSliceFlag collects a repeatable flag (e.g. multiple
+// --trusted-proxy occurrences) into a slice.
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string { return strings.Join(*s, ",") }
+func (s *stringSliceFlag) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
 
 // loggingDelivery makes the local/self-hosted "no bot token configured"
 // path observable: every simulated send is printed (destination + the
@@ -73,8 +86,19 @@ func runServe(args []string) int {
 	dbPath := fs.String("db", "ai-limit-server.db", "SQLite database path")
 	combineWindow := fs.Duration("combine-window", 10*time.Minute, "max reset_at gap to combine same-window-kind, different-provider events")
 	pollInterval := fs.Duration("poll-interval", 5*time.Second, "scheduler poll interval")
+	threshold := fs.Float64("threshold", domain.DefaultScheduleThreshold, "used_percent at/above which a durable reset event is created (docs/PROTOCOL_V1.md's default is 80)")
+	var trustedProxies stringSliceFlag
+	fs.Var(&trustedProxies, "trusted-proxy", "CIDR of a reverse proxy allowed to set X-Forwarded-For (repeatable; none trusted by default)")
 	if err := fs.Parse(args); err != nil {
 		return 3
+	}
+
+	// Fail closed: /api/v1/pair must never accept a pairing attempt with no
+	// secret configured to verify codes against.
+	pairingSecret := os.Getenv("AI_LIMIT_NOTIFIER_PAIRING_SECRET")
+	if pairingSecret == "" {
+		fmt.Fprintln(os.Stderr, "serve: AI_LIMIT_NOTIFIER_PAIRING_SECRET is required (a long random string, kept out of git)")
+		return 1
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -87,22 +111,38 @@ func runServe(args []string) int {
 	}
 	defer st.Close()
 
+	botToken := os.Getenv("AI_LIMIT_NOTIFIER_TELEGRAM_BOT_TOKEN")
+
 	var deliv delivery.Delivery
-	if token := os.Getenv("AI_LIMIT_NOTIFIER_TELEGRAM_BOT_TOKEN"); token != "" {
-		deliv = delivery.NewTelegramDelivery(token)
+	if botToken != "" {
+		deliv = delivery.NewTelegramDelivery(botToken)
 		fmt.Println("serve: Telegram delivery enabled")
 	} else {
 		deliv = &loggingDelivery{inner: delivery.NewFakeDelivery()}
-		fmt.Println("serve: no AI_LIMIT_NOTIFIER_TELEGRAM_BOT_TOKEN set — using FakeDelivery (each send is logged to stdout, not actually sent anywhere)")
+		fmt.Println("serve: no AI_LIMIT_NOTIFIER_TELEGRAM_BOT_TOKEN set — using FakeDelivery (each send is logged to stdout, not actually sent anywhere); the onboarding bot is also disabled")
 	}
 
 	apiServer := api.New(st)
 	apiServer.CombineWindow = *combineWindow
+	apiServer.Threshold = *threshold
+	apiServer.SetPairingSecret([]byte(pairingSecret))
+	if err := apiServer.SetTrustedProxies(trustedProxies); err != nil {
+		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+		return 1
+	}
+	if len(trustedProxies) > 0 {
+		fmt.Printf("serve: trusting X-Forwarded-For from: %s\n", strings.Join(trustedProxies, ", "))
+	}
 
 	sch := scheduler.New(st, deliv)
 	sch.PollInterval = *pollInterval
-
 	go sch.Run(ctx)
+
+	if botToken != "" {
+		bot := telegrambot.New(botToken, st, []byte(pairingSecret))
+		go bot.Run(ctx)
+		fmt.Println("serve: Telegram onboarding bot running (long polling)")
+	}
 
 	httpServer := apiServer.NewHTTPServer(*addr)
 

@@ -77,6 +77,8 @@ Link this installation to the hosted/self-hosted account without requiring Teleg
 
 The pairing code is short-lived. The resulting device credential may be stored as static install-time configuration so the device remains linked after reboot, but monitoring state must not be periodically persisted locally.
 
+**Implemented (P4).** `--server-url` is optional (falls back to `AI_LIMIT_NOTIFIER_SERVER_URL`, then nothing). The saved config (`server_url`, `device_id`, `device_token`, `schema_version`) lives at `$XDG_CONFIG_HOME/ai-limit-notifier/config.json` (falling back to `~/.config/ai-limit-notifier/config.json`), written atomically with a 0700 directory and 0600 file. `monitor` reads it automatically afterward — a plain `ai-limit-notifier monitor` with no flags works once `link` has run, per the documented CLI-flag > environment > saved-config precedence (the device token itself is never a CLI flag, only environment or the saved config, so it never appears in `ps`/shell history). Tested for: correct permissions, atomic replacement, no leftover credential file on a failed link, an existing config left untouched by a failed relink, and no redirect ever followed.
+
 ### `ai-limit-notifier doctor`
 
 Read-only post-install diagnostics.

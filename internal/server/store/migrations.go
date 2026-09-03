@@ -59,6 +59,44 @@ CREATE INDEX idx_events_due ON notification_events(status, next_attempt_at);
 CREATE INDEX idx_events_combine ON notification_events(user_id, window_kind, status);
 `,
 	},
+	{
+		version: 2,
+		sql: `
+-- The real Telegram identity. A partial unique index (rather than a column
+-- constraint) because pre-P4 users created by bootstrap-device have no
+-- Telegram identity at all yet, and SQLite's UNIQUE treats every NULL as
+-- distinct anyway -- the WHERE clause just makes that explicit.
+ALTER TABLE users ADD COLUMN telegram_user_id INTEGER;
+CREATE UNIQUE INDEX idx_users_telegram_user_id ON users(telegram_user_id) WHERE telegram_user_id IS NOT NULL;
+
+-- One row per issued pairing code. code_verifier is HMAC-SHA256(pairing
+-- secret, normalized code) -- never the plaintext code (see
+-- internal/server/auth's pairing code doc comment for why a plain hash
+-- isn't enough for a human-enterable, lower-entropy secret). consumed_at
+-- doubles as "invalidated": /start replacing a still-valid previous code
+-- marks it consumed without ever creating a device for it.
+CREATE TABLE pairing_codes (
+	id TEXT PRIMARY KEY,
+	user_id TEXT NOT NULL REFERENCES users(id),
+	code_verifier BLOB NOT NULL UNIQUE,
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	consumed_at INTEGER
+);
+CREATE INDEX idx_pairing_codes_user ON pairing_codes(user_id);
+
+-- Singleton row: the last processed Telegram getUpdates offset, so a
+-- restarted bot worker resumes instead of reprocessing (or permanently
+-- skipping) updates. Server-side runtime persistence is allowed here --
+-- SECURITY.md's "no local runtime writes" guarantee is about the local
+-- agent, not this server.
+CREATE TABLE telegram_bot_state (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	last_update_id INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO telegram_bot_state (id, last_update_id) VALUES (1, 0);
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {

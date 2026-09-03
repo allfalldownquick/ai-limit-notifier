@@ -6,12 +6,16 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -24,6 +28,7 @@ import (
 	"github.com/allfalldownquick/ai-limit-notifier/internal/agent"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/claudesock"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
+	"github.com/allfalldownquick/ai-limit-notifier/internal/localconfig"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/claude"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/codex"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/sink"
@@ -31,6 +36,11 @@ import (
 )
 
 const readTimeout = 10 * time.Second
+
+// clientVersion is reported to the server during pairing (docs/PROTOCOL_V1.md's
+// client_version field) — informational/diagnostic only, never trusted for
+// anything security-sensitive.
+const clientVersion = "0.1.0-dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -54,6 +64,8 @@ func main() {
 		code = runStatuslineWrapper(os.Args[2:])
 	case "install":
 		code = runInstall(os.Args[2:])
+	case "link":
+		code = runLink(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		code = 0
@@ -74,11 +86,41 @@ Commands:
   show-payload        Show the exact normalized data a future server call would send.
   status              Concise current local state.
   monitor             Run the RAM-only monitoring agent (Codex polling + Claude socket).
+  link CODE           Redeem a Telegram-issued pairing code and save the server link locally.
   statusline-wrapper  Claude Code statusLine chaining wrapper (installed, not run by hand).
   install --plan      Show the Claude statusLine wrapper installation plan (read-only).`)
 }
 
 // --- shared helpers -------------------------------------------------------
+
+// resolveServerURL applies the documented config precedence: an explicit
+// CLI flag wins, then the environment, then whatever `link` last saved.
+func resolveServerURL(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if v := os.Getenv("AI_LIMIT_NOTIFIER_SERVER_URL"); v != "" {
+		return v
+	}
+	if cfg, err := localconfig.Load(); err == nil {
+		return cfg.ServerURL
+	}
+	return ""
+}
+
+// resolveDeviceToken never consults a CLI flag — a bearer token must not
+// appear in `ps`/shell history the way a flag value would. Environment
+// wins over the saved config so an operator can override it without
+// editing (or without there being) a config file.
+func resolveDeviceToken() string {
+	if v := os.Getenv("AI_LIMIT_NOTIFIER_DEVICE_TOKEN"); v != "" {
+		return v
+	}
+	if cfg, err := localconfig.Load(); err == nil {
+		return cfg.DeviceToken
+	}
+	return ""
+}
 
 type windowJSON struct {
 	UsedPercent float64 `json:"used_percent"`
@@ -390,29 +432,34 @@ func runMonitor(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Precedence for the server URL: explicit flag > environment > saved
+	// `link` config > (dry-run/no server). The device token never comes
+	// from a flag (it would appear in `ps`/shell history) — only
+	// environment or the config `link` wrote, environment taking
+	// precedence so an operator can override the config without editing it.
+	resolvedServerURL := resolveServerURL(*serverURL)
+
 	var core *agent.Core
 	switch {
-	case *dryRun || *serverURL == "":
-		if *serverURL != "" {
-			fmt.Println("monitor: --dry-run set; ignoring --server-url and printing would-be events instead")
+	case *dryRun || resolvedServerURL == "":
+		if resolvedServerURL != "" {
+			fmt.Println("monitor: --dry-run set; ignoring the configured server and printing would-be events instead")
 		}
 		core = agent.NewCore(&printSink{w: os.Stdout, dryRun: true}, *threshold)
 		fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s dry-run=true\n", *threshold, *codexInterval)
 	default:
-		// Deliberately not a CLI flag: a bearer token must never appear in
-		// `ps`/shell history the way a flag value would.
-		token := os.Getenv("AI_LIMIT_NOTIFIER_DEVICE_TOKEN")
+		token := resolveDeviceToken()
 		if token == "" {
-			fmt.Fprintln(os.Stderr, "monitor: --server-url given but AI_LIMIT_NOTIFIER_DEVICE_TOKEN is not set")
+			fmt.Fprintln(os.Stderr, "monitor: a server is configured but no device token was found (AI_LIMIT_NOTIFIER_DEVICE_TOKEN, or run `ai-limit-notifier link CODE` first)")
 			return 3
 		}
-		httpSink, err := sink.New(*serverURL, token)
+		httpSink, err := sink.New(resolvedServerURL, token)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "monitor: %v\n", err)
 			return 3
 		}
 		core = agent.NewCore(httpSink, *threshold)
-		fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s server=%s\n", *threshold, *codexInterval, *serverURL)
+		fmt.Printf("monitor: threshold=%.0f%% codex-interval=%s server=%s\n", *threshold, *codexInterval, resolvedServerURL)
 	}
 
 	fmt.Println("monitor: local runtime persistence disabled; all state is in RAM")
@@ -436,6 +483,145 @@ func runMonitor(args []string) int {
 	fmt.Println("monitor: shutting down")
 	wg.Wait()
 	return 0
+}
+
+// --- link ------------------------------------------------------------------
+
+func runLink(args []string) int {
+	// The pairing code is always the first argument (matching the exact
+	// usage the bot itself sends: "ai-limit-notifier link CODE"), sliced
+	// off before flag.Parse — Go's flag package stops parsing at the first
+	// non-flag token, so passing the whole args slice through would leave
+	// any flag written *after* the code unparsed.
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(os.Stderr, "usage: ai-limit-notifier link <PAIRING_CODE> [--server-url URL]")
+		return 3
+	}
+	code := args[0]
+
+	fs := flag.NewFlagSet("link", flag.ContinueOnError)
+	serverURLFlag := fs.String("server-url", "", "hosted/self-hosted server base URL (e.g. https://api.example.com)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 3
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: ai-limit-notifier link <PAIRING_CODE> [--server-url URL]")
+		return 3
+	}
+
+	serverURL := resolveServerURL(*serverURLFlag)
+	if serverURL == "" {
+		fmt.Fprintln(os.Stderr, "link: no server URL given (--server-url, AI_LIMIT_NOTIFIER_SERVER_URL, or an existing config)")
+		return 3
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	deviceID, token, err := pairWithServer(ctx, serverURL, code)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "link: %v\n", err)
+		return 1
+	}
+
+	cfg := &localconfig.Config{
+		SchemaVersion: localconfig.SchemaVersion,
+		ServerURL:     serverURL,
+		DeviceID:      deviceID,
+		DeviceToken:   token,
+	}
+	if err := localconfig.Save(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "link: failed to save local config: %v\n", err)
+		return 1
+	}
+
+	path, _ := localconfig.Path()
+	fmt.Printf("link: linked (device_id=%s)\n", deviceID)
+	fmt.Printf("link: config saved to %s\n", path)
+	fmt.Println("link: run `ai-limit-notifier monitor` to start reporting usage")
+	return 0
+}
+
+type pairResponseWire struct {
+	Linked      bool   `json:"linked"`
+	DeviceID    string `json:"device_id"`
+	DeviceToken string `json:"device_token"`
+}
+
+// pairWithServer implements the client side of POST /api/v1/pair with the
+// same strict principles as internal/sink's HTTPSink: HTTPS required
+// unless the host is loopback, no redirects followed, a bounded timeout,
+// a bounded response read, and the pairing code/response token are never
+// logged anywhere in this function.
+func pairWithServer(ctx context.Context, serverURL, code string) (deviceID, token string, err error) {
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid server URL: %w", err)
+	}
+	if u.Scheme != "https" && !isLoopbackHostname(u.Hostname()) {
+		return "", "", errors.New("server URL must use https:// (loopback http:// is allowed for local testing only)")
+	}
+
+	platform := runtime.GOOS
+	if isWSL() {
+		platform += "-wsl"
+	}
+	platform += "-" + runtime.GOARCH
+
+	body, err := json.Marshal(map[string]string{
+		"code":           code,
+		"client_version": clientVersion,
+		"platform":       platform,
+	})
+	if err != nil {
+		return "", "", err
+	}
+
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		// Never follow a redirect: a pairing code is a one-use secret, and
+		// this endpoint is unauthenticated, so refusing to chase a 3xx
+		// anywhere else is the simplest correct policy — see internal/sink.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(serverURL, "/")+"/api/v1/pair", bytes.NewReader(body))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("pairing request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+	if err != nil {
+		return "", "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		// The server's error body is small and sanitized (see
+		// internal/server/api's errorResponse); safe to surface as-is,
+		// and it never contains a code or token by construction.
+		return "", "", fmt.Errorf("server rejected pairing: %d %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var parsed pairResponseWire
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", "", fmt.Errorf("malformed server response: %w", err)
+	}
+	if !parsed.Linked || parsed.DeviceID == "" || parsed.DeviceToken == "" {
+		return "", "", errors.New("server did not confirm linking")
+	}
+	return parsed.DeviceID, parsed.DeviceToken, nil
+}
+
+func isLoopbackHostname(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // --- statusline-wrapper ------------------------------------------------
