@@ -565,7 +565,16 @@ func runMonitor(args []string) int {
 		return 3
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// SIGHUP matters here specifically because it isn't just "another
+	// signal to add for completeness": a closed terminal/dropped WSL
+	// session delivers it (not SIGINT) to the foreground process group,
+	// and SIGHUP's default disposition is immediate termination with no
+	// deferred cleanup at all — reproduced directly against this exact
+	// binary: a real SIGINT always let ServeClaudeSocket's cleanup remove
+	// the socket file, but a real SIGHUP killed the process before any
+	// defer ran, leaving a stale (harmless, but not what the doc comment
+	// on ServeClaudeSocket promises) socket file behind.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	// Precedence for the server URL: explicit flag > environment > saved

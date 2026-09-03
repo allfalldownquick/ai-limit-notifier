@@ -85,6 +85,53 @@ func TestServeClaudeSocketMalformedInputNeverCrashes(t *testing.T) {
 	}
 }
 
+// TestServeClaudeSocketReplacesStaleSocketFile proves the "unexpected
+// stale socket at next startup" recovery path still works: a socket file
+// left behind by a killed/crashed process (no live listener behind it) must
+// not block a fresh ServeClaudeSocket from starting, unlike a genuinely
+// live conflicting listener (see TestServeClaudeSocketBindConflictReturnsError).
+func TestServeClaudeSocketReplacesStaleSocketFile(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	path := claudesock.Path()
+
+	// Simulate a crash: a socket file left behind with nothing listening
+	// on it. (A clean net.Listen+Close won't do — Go's UnixListener
+	// unlinks its own socket file on Close by default, which would just
+	// clean up after itself rather than reproduce a stale leftover.)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &recordingSink{}
+	core := NewCore(sink, 80)
+	ctx, cancel := context.WithCancel(context.Background())
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- ServeClaudeSocket(ctx, core) }()
+
+	snap := domain.UsageSnapshot{
+		Provider: domain.ProviderClaude,
+		FiveHour: &domain.UsageWindow{Kind: domain.WindowFiveHour, UsedPercent: 90, ResetAt: time.Now().Add(2 * time.Hour)},
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	var sendErr error
+	for time.Now().Before(deadline) {
+		if sendErr = claudesock.Send(context.Background(), snap, 200*time.Millisecond); sendErr == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sendErr != nil {
+		cancel()
+		<-serveErr
+		t.Fatalf("a fresh agent never came up behind the stale socket file: %v", sendErr)
+	}
+
+	cancel()
+	if err := <-serveErr; err != nil {
+		t.Fatalf("ServeClaudeSocket returned an error: %v", err)
+	}
+}
+
 func TestServeClaudeSocketBindConflictReturnsError(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	sink := &recordingSink{}
