@@ -30,6 +30,7 @@ import (
 	"github.com/allfalldownquick/ai-limit-notifier/internal/agent"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/claudesock"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/domain"
+	"github.com/allfalldownquick/ai-limit-notifier/internal/installer"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/localconfig"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/claude"
 	"github.com/allfalldownquick/ai-limit-notifier/internal/provider/codex"
@@ -75,6 +76,8 @@ func main() {
 		code = runStatuslineWrapper(os.Args[2:])
 	case "install":
 		code = runInstall(os.Args[2:])
+	case "uninstall":
+		code = runUninstall(os.Args[2:])
 	case "link":
 		code = runLink(os.Args[2:])
 	case "config":
@@ -103,7 +106,10 @@ Commands:
   config              Show the local notification threshold.
   config threshold N  Set the local notification threshold (0 < N <= 100; default 80).
   statusline-wrapper  Claude Code statusLine chaining wrapper (installed, not run by hand).
-  install --plan      Show the Claude statusLine wrapper installation plan (read-only).`)
+  install --plan      Show the full install plan (binary/statusLine/autostart), read-only.
+  install             Install: durable binary, systemd --user autostart, Claude statusLine.
+  uninstall --plan    Show the uninstall plan, read-only.
+  uninstall           Undo install (never touches link/device config).`)
 }
 
 // --- shared helpers -------------------------------------------------------
@@ -273,17 +279,26 @@ func runDoctor(args []string) int {
 	if err != nil {
 		fmt.Printf("claude statusLine: FAIL (%v)\n", err)
 		ok = false
-	} else if !info.Configured {
-		fmt.Println("claude statusLine: NOT CONFIGURED (passive capture requires a configured statusLine command)")
-		ok = false
-	} else if strings.Contains(info.Command, "statusline-wrapper") {
-		fmt.Println("claude statusLine: configured, wrapper installed")
-		if !strings.Contains(info.Command, "--original-command") {
-			fmt.Println("claude statusLine: DRIFT (wrapper installed without --original-command; original statusLine output would be lost)")
-			ok = false
-		}
 	} else {
-		fmt.Println("claude statusLine: configured, wrapper NOT installed (passive capture inactive — see `install --plan`)")
+		cur := ""
+		if info.Configured {
+			cur = info.Command
+		}
+		classified := installer.ClassifyStatusLine(cur)
+		switch classified.State {
+		case installer.StatusLineAbsent:
+			fmt.Println("claude statusLine: NOT CONFIGURED (passive capture requires a configured statusLine command)")
+			ok = false
+		case installer.StatusLineNotifierWithOriginal:
+			fmt.Println("claude statusLine: configured, wrapper installed (chains to the original statusLine)")
+		case installer.StatusLineNotifierWithoutOriginal:
+			fmt.Println("claude statusLine: configured, wrapper installed (capture-only, no pre-existing statusLine)")
+		case installer.StatusLineMalformed:
+			fmt.Println("claude statusLine: DRIFT (mentions statusline-wrapper but doesn't match a recognized shape)")
+			ok = false
+		default: // StatusLineExistingNonNotifier
+			fmt.Println("claude statusLine: configured, wrapper NOT installed (passive capture inactive — see `install --plan`)")
+		}
 	}
 
 	if conn, err := net.DialTimeout("unix", claudesock.Path(), 200*time.Millisecond); err == nil {
@@ -336,6 +351,25 @@ func runDoctor(args []string) int {
 			ok = false
 		default:
 			fmt.Println("device credential: valid")
+		}
+	}
+
+	if m, err := installer.LoadManifest(); err != nil {
+		fmt.Println("install: FAIL (manifest unreadable/malformed)")
+		ok = false
+	} else if m == nil {
+		fmt.Println("install: not installed (run `ai-limit-notifier install --plan`)")
+	} else {
+		if _, statErr := os.Stat(m.InstalledBinaryPath); statErr == nil {
+			fmt.Printf("install: binary present (%s)\n", m.InstalledBinaryPath)
+		} else {
+			fmt.Printf("install: binary MISSING (%s) — the shell-level fail-open keeps the original statusLine working; run `ai-limit-notifier install` to restore it\n", m.InstalledBinaryPath)
+			ok = false
+		}
+		if installer.SystemdUserAvailable(ctx) {
+			fmt.Printf("autostart: enabled=%v active=%v\n", installer.UnitIsEnabled(ctx), installer.UnitIsActive(ctx))
+		} else {
+			fmt.Println("autostart: systemd --user not available in this environment")
 		}
 	}
 
@@ -499,6 +533,7 @@ func runStatus(args []string) int {
 	} else {
 		fmt.Println("Agent: not running")
 	}
+	printInstallStatus(ctx)
 	printLinkStatus()
 	printThreshold()
 
@@ -522,6 +557,36 @@ func runStatus(args []string) int {
 	fmt.Println("Local runtime persistence: disabled")
 
 	return 0
+}
+
+// printInstallStatus reports installed/autostart state, read-only, no
+// tokens: whether `install` has run, and (if systemd --user is available)
+// whether the autostart unit is currently enabled/active.
+func printInstallStatus(ctx context.Context) {
+	m, err := installer.LoadManifest()
+	if err != nil {
+		fmt.Println("Installed: unknown (install manifest unreadable — run `ai-limit-notifier doctor` for details)")
+		return
+	}
+	if m == nil {
+		fmt.Println("Installed: no")
+		return
+	}
+	fmt.Println("Installed: yes")
+	if !installer.SystemdUserAvailable(ctx) {
+		fmt.Println("Autostart: unavailable (systemd --user not present in this environment)")
+		return
+	}
+	state := "disabled"
+	if installer.UnitIsEnabled(ctx) {
+		state = "enabled"
+	}
+	if installer.UnitIsActive(ctx) {
+		state += " / running"
+	} else {
+		state += " / not running"
+	}
+	fmt.Printf("Autostart: %s\n", state)
 }
 
 // printLinkStatus reports link state from the saved config only -- what
@@ -735,8 +800,48 @@ func runLink(args []string) int {
 	path, _ := localconfig.Path()
 	fmt.Printf("link: linked (device_id=%s)\n", deviceID)
 	fmt.Printf("link: config saved to %s\n", path)
-	fmt.Println("link: run `ai-limit-notifier monitor` to start reporting usage")
+
+	activateInstalledService()
 	return 0
+}
+
+// activateInstalledService is Correction 4's second half: once a valid
+// credential is durably saved (already done by the time this runs), start
+// or restart the P5-installed autostart service so it picks up the new
+// credential -- but only if `install` actually set one up. The credential
+// save above already succeeded and returned 0 regardless of anything
+// here: a systemd problem must never make `link` itself look like it
+// failed, only print a diagnostic and fall back to the manual-monitor
+// instruction.
+func activateInstalledService() {
+	manifest, err := installer.LoadManifest()
+	if err != nil || manifest == nil {
+		fmt.Println("link: run `ai-limit-notifier monitor` to start reporting usage")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if !installer.SystemdUserAvailable(ctx) {
+		fmt.Println("link: installed, but systemd --user is not available here -- run `ai-limit-notifier monitor` manually")
+		return
+	}
+
+	if installer.UnitIsActive(ctx) {
+		if err := installer.RestartUnit(ctx); err != nil {
+			fmt.Printf("link: installed service restart failed (%v) -- run `ai-limit-notifier monitor` manually\n", err)
+			return
+		}
+		fmt.Println("link: restarted the installed monitor service with the new credential")
+		return
+	}
+
+	if err := installer.StartUnit(ctx); err != nil {
+		fmt.Printf("link: installed service start failed (%v) -- run `ai-limit-notifier monitor` manually\n", err)
+		return
+	}
+	fmt.Println("link: started the installed monitor service")
 }
 
 type pairResponseWire struct {
@@ -878,6 +983,7 @@ func printThreshold() {
 func runStatuslineWrapper(args []string) int {
 	fs := flag.NewFlagSet("statusline-wrapper", flag.ContinueOnError)
 	original := fs.String("original-command", "", "the user's original statusLine command to chain to")
+	captureOnly := fs.Bool("capture-only", false, "no original statusLine to chain to (install Case B); capture only, never an error")
 	if err := fs.Parse(args); err != nil {
 		return 3
 	}
@@ -885,72 +991,205 @@ func runStatuslineWrapper(args []string) int {
 	// the chained original command is cancelled too rather than orphaned.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return wrapper.Run(ctx, os.Stdin, os.Stdout, os.Stderr, *original)
+	return wrapper.Run(ctx, os.Stdin, os.Stdout, os.Stderr, *original, *captureOnly)
 }
 
-// --- install --plan ------------------------------------------------------
+// --- install / uninstall --------------------------------------------------
+
+func currentStatusLineCommand() (string, error) {
+	info, err := claude.DetectStatusLine()
+	if err != nil {
+		return "", err
+	}
+	if !info.Configured {
+		return "", nil
+	}
+	return info.Command, nil
+}
 
 func runInstall(args []string) int {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
-	plan := fs.Bool("plan", false, "show the installation plan without applying it")
+	planOnly := fs.Bool("plan", false, "show the install plan without applying it (read-only, zero writes)")
 	if err := fs.Parse(args); err != nil {
 		return 3
 	}
-	if !*plan {
-		fmt.Fprintln(os.Stderr, "only `install --plan` is implemented; applying changes requires a separate explicit step that does not exist yet")
-		return 3
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	current, err := currentStatusLineCommand()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install: reading Claude statusLine: %v\n", err)
+		return 1
+	}
+
+	p, err := installer.ComputeInstallPlan(ctx, current)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install: %v\n", err)
+		return 1
+	}
+	printInstallPlan(p)
+
+	if *planOnly {
+		return 0
+	}
+	if p.Blocked {
+		return 1
+	}
+	if p.AlreadyInstalled {
+		fmt.Println("install: already installed and up to date, nothing to do")
+		return 0
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		exe = "ai-limit-notifier"
-	}
-
-	info, err := claude.DetectStatusLine()
-	if err != nil {
-		fmt.Printf("Claude statusLine detection failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "install: resolve current executable: %v\n", err)
 		return 1
 	}
-
-	fmt.Println("Plan: Claude Code statusLine chaining wrapper")
-	fmt.Println()
-	if !info.Configured {
-		fmt.Println("Current ~/.claude/settings.json statusLine.command: (none configured)")
-		fmt.Println("Nothing to chain to yet: install a statusLine command first, or this")
-		fmt.Println("plan would need to install a bare (non-chaining) wrapper, which is not")
-		fmt.Println("recommended since there would be no original output to preserve.")
-		return 0
+	if err := installer.ApplyInstall(ctx, p, exe); err != nil {
+		fmt.Fprintf(os.Stderr, "install: %v\n", err)
+		return 1
 	}
-	if strings.Contains(info.Command, "statusline-wrapper") {
-		fmt.Println("Current ~/.claude/settings.json statusLine.command already runs the wrapper:")
-		fmt.Printf("  %s\n", info.Command)
-		fmt.Println("No change planned.")
-		return 0
+	// Last step, only once binary+unit+manifest are all fully in place:
+	// flip the live statusLine to the notifier-managed command. If this
+	// fails or the process is killed before it runs, the user's original
+	// statusLine is completely untouched and a repeated `install` safely
+	// recovers (see ComputeInstallPlan's idempotency handling).
+	if p.StatusLineProposedCommand != "" {
+		if err := claude.SetStatusLineCommand(p.StatusLineProposedCommand); err != nil {
+			fmt.Fprintf(os.Stderr, "install: binary/service installed, but failed to update Claude statusLine: %v\n", err)
+			return 1
+		}
 	}
 
-	proposed := fmt.Sprintf("%s statusline-wrapper --original-command %s", exe, shellQuote(info.Command))
-
-	fmt.Println("This does NOT apply anything. It only shows the one persistent change")
-	fmt.Println("that installing Claude passive capture would make.")
-	fmt.Println()
-	fmt.Println("File: ~/.claude/settings.json")
-	fmt.Println("Field: statusLine.command")
-	fmt.Println()
-	fmt.Printf("Current:  %s\n", info.Command)
-	fmt.Printf("Proposed: %s\n", proposed)
-	fmt.Println()
-	fmt.Println("The wrapper always re-runs the exact current command above with the same")
-	fmt.Println("stdin and copies its stdout/stderr/exit code straight through, so the")
-	fmt.Println("visible statusLine is unaffected. It additionally sends only the four")
-	fmt.Println("normalized rate-limit fields to a local RAM-backed Unix socket for the")
-	fmt.Println("`monitor` agent to consume; if that fails for any reason, the original")
-	fmt.Println("statusLine output is unaffected.")
-	fmt.Println()
-	fmt.Println("This build does not apply this change automatically. Ask the operator to")
-	fmt.Println("edit ~/.claude/settings.json by hand (or wait for a real `install`).")
+	fmt.Println("install: complete")
+	if !p.Linked {
+		fmt.Println("install: not linked yet -- run `ai-limit-notifier link <CODE>` to start monitoring")
+	}
 	return 0
 }
 
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+func runUninstall(args []string) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	planOnly := fs.Bool("plan", false, "show the uninstall plan without applying it (read-only, zero writes)")
+	if err := fs.Parse(args); err != nil {
+		return 3
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	current, err := currentStatusLineCommand()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "uninstall: reading Claude statusLine: %v\n", err)
+		return 1
+	}
+
+	p, err := installer.ComputeUninstallPlan(ctx, current)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
+		return 1
+	}
+	printUninstallPlan(p)
+
+	if *planOnly || p.NotInstalled {
+		return 0
+	}
+	if p.Blocked {
+		return 1
+	}
+
+	// Restore/remove the statusLine first: the live config should never
+	// keep pointing at a binary that's about to be removed.
+	if p.StatusLineWillBeRemoved {
+		if err := claude.RemoveStatusLineCommand(); err != nil {
+			fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
+			return 1
+		}
+	} else if p.StatusLineProposedCommand != "" {
+		if err := claude.SetStatusLineCommand(p.StatusLineProposedCommand); err != nil {
+			fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
+			return 1
+		}
+	}
+
+	if err := installer.ApplyUninstall(ctx, p); err != nil {
+		fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
+		return 1
+	}
+
+	fmt.Println("uninstall: complete (link/device credential and notification threshold were not touched)")
+	return 0
+}
+
+func printInstallPlan(p *installer.Plan) {
+	fmt.Println("Plan: ai-limit-notifier install")
+	fmt.Println()
+	if p.Blocked {
+		fmt.Printf("BLOCKED: %s\n", p.BlockedReason)
+		return
+	}
+	if p.AlreadyInstalled {
+		fmt.Println("Already installed and up to date. Nothing to do.")
+		fmt.Println()
+	}
+	fmt.Printf("Binary path: %s (currently exists: %v)\n", p.BinaryPath, p.BinaryCurrentlyExists)
+	fmt.Println()
+	fmt.Println("Claude statusLine:")
+	fmt.Printf("  Current state: %s\n", p.StatusLineCurrentState)
+	if p.StatusLineOriginalExisted {
+		fmt.Printf("  Existing statusLine will be preserved and chained to: %s\n", p.StatusLineOriginalCommand)
+	} else {
+		fmt.Println("  No pre-existing statusLine: a transport-only capture command will be")
+		fmt.Println("  installed (Case B) -- no new visible status bar is added.")
+	}
+	fmt.Printf("  Proposed statusLine.command: %s\n", p.StatusLineProposedCommand)
+	fmt.Println()
+	fmt.Println("Codex:")
+	if p.CodexResolved {
+		fmt.Printf("  Resolved: %s (added to the service's PATH)\n", p.CodexBinDir)
+	} else {
+		fmt.Println("  WARNING: codex was not found in this shell's PATH. Autostart Codex")
+		fmt.Println("  polling will not work until this is fixed; Claude tracking is unaffected.")
+	}
+	fmt.Println()
+	fmt.Println("systemd --user:")
+	fmt.Printf("  Available: %v\n", p.SystemdAvailable)
+	if p.SystemdAvailable {
+		fmt.Printf("  Unit path: %s\n", p.UnitPath)
+		fmt.Println("  --- unit content ---")
+		fmt.Print(p.UnitContent)
+		fmt.Println("  --- end unit content ---")
+		fmt.Printf("  Will enable: %v\n", p.WillEnableUnit)
+		fmt.Printf("  Will start: %v (%s)\n", p.WillStartUnit, p.StartReason)
+	} else {
+		fmt.Println("  Not available in this environment -- autostart will not be configured.")
+	}
+	fmt.Printf("  Current linger state for this user: %v (install never changes this)\n", p.LingerCurrentlyEnabled)
+	fmt.Println()
+	fmt.Printf("Linked: %v\n", p.Linked)
+}
+
+func printUninstallPlan(p *installer.Plan) {
+	fmt.Println("Plan: ai-limit-notifier uninstall")
+	fmt.Println()
+	if p.NotInstalled {
+		fmt.Println("Not installed. Nothing to do.")
+		return
+	}
+	if p.Blocked {
+		fmt.Printf("BLOCKED: %s\n", p.BlockedReason)
+		return
+	}
+	fmt.Printf("Will stop/disable the systemd --user unit: %v\n", p.WillDisableUnit)
+	fmt.Printf("Will remove unit file: %s\n", p.UnitPath)
+	fmt.Printf("Will remove installed binary: %s\n", p.BinaryPath)
+	fmt.Println()
+	if p.StatusLineWillBeRemoved {
+		fmt.Println("statusLine had no pre-existing command: it will be removed entirely (back to absent).")
+	} else {
+		fmt.Printf("statusLine will be restored to: %s\n", p.StatusLineProposedCommand)
+	}
+	fmt.Println()
+	fmt.Println("Link/device credential and notification threshold will NOT be touched.")
 }

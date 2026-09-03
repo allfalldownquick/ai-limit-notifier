@@ -118,6 +118,121 @@ func DetectStatusLine() (StatusLineInfo, error) {
 	return StatusLineInfo{Configured: true, Command: settings.StatusLine.Command}, nil
 }
 
+func settingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude", "settings.json"), nil
+}
+
+// SetStatusLineCommand atomically sets statusLine.command in
+// ~/.claude/settings.json to command. Every other top-level field is
+// decoded generically as map[string]json.RawMessage -- never into a
+// narrower struct that could silently drop a field this package doesn't
+// know about -- and only the "statusLine" entry is replaced. Two cosmetic,
+// non-semantic changes are possible in the rewritten file: top-level key
+// order (Go's encoding/json marshals maps in alphabetical key order; JSON
+// object key order carries no meaning per spec) and the internal
+// indentation of a nested object/array value (Go's Indent pass reformats
+// embedded raw JSON to the surrounding style rather than preserving its
+// original whitespace verbatim). No field's actual JSON content --
+// scalars byte-for-byte, objects/arrays semantically -- is ever altered.
+// Creates the file (and ~/.claude) if it doesn't exist yet.
+func SetStatusLineCommand(command string) error {
+	return patchSettings(func(m map[string]json.RawMessage) error {
+		raw, err := json.Marshal(struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		}{Type: "command", Command: command})
+		if err != nil {
+			return err
+		}
+		m["statusLine"] = raw
+		return nil
+	})
+}
+
+// RemoveStatusLineCommand atomically removes the statusLine key entirely
+// -- install Case B's uninstall path, returning the file to "no statusLine
+// configured" exactly as it would be if notifier had never touched it.
+// Removing an already-absent key is not an error. Every other field is
+// preserved the same way SetStatusLineCommand preserves them.
+func RemoveStatusLineCommand() error {
+	return patchSettings(func(m map[string]json.RawMessage) error {
+		delete(m, "statusLine")
+		return nil
+	})
+}
+
+func patchSettings(mutate func(map[string]json.RawMessage) error) error {
+	path, err := settingsPath()
+	if err != nil {
+		return err
+	}
+
+	m := map[string]json.RawMessage{}
+	mode := os.FileMode(0o644)
+	raw, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// Starting fresh: no existing settings.json at all.
+	case err != nil:
+		return err
+	default:
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return fmt.Errorf("%w: %v", ErrMalformed, err)
+		}
+		if fi, statErr := os.Stat(path); statErr == nil {
+			mode = fi.Mode().Perm()
+		}
+	}
+
+	if err := mutate(m); err != nil {
+		return err
+	}
+
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".settings-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp settings file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp settings file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp settings file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp settings file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return fmt.Errorf("set settings file permissions: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace settings file: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // Version runs the installed Claude Code CLI's --version flag. This is a
 // local process invocation, not a model/API call.
 func Version(ctx context.Context) (string, error) {

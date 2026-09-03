@@ -41,11 +41,26 @@ const SocketSendTimeout = 150 * time.Millisecond
 // exit code. If originalCommand fails to start or exits non-zero, that
 // failure is surfaced exactly as if the wrapper were not present.
 //
+// captureOnly is the install Case B mode (no pre-existing statusLine to
+// chain to): no original command is run at all -- an empty originalCommand
+// is the intended, normal state, not a misconfiguration, so nothing is
+// printed and the exit code is always 0. It exists specifically so an
+// empty originalCommand is never ambiguous between "nothing configured by
+// mistake" (captureOnly false: an error) and "nothing to chain to by
+// design" (captureOnly true: silently fine).
+//
 // A read failure, a malformed/unparsable payload, or an unreachable agent
 // socket are all swallowed silently — none of them may change stdout,
 // stderr, or the returned exit code.
-func Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, originalCommand string) int {
+func Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, originalCommand string, captureOnly bool) int {
 	raw, readErr := io.ReadAll(stdin)
+
+	if captureOnly {
+		if readErr == nil {
+			captureAndSend(ctx, raw)
+		}
+		return 0
+	}
 
 	resultCh := make(chan int, 1)
 	go func() {

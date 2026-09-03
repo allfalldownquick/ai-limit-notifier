@@ -34,7 +34,7 @@ func TestRunPassthroughPreservesOutput(t *testing.T) {
 	original := writeFixture(t, "#!/bin/sh\ncat\nprintf ' [suffix]'\n")
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "sh "+original)
+	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "sh "+original, false)
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr.String())
@@ -53,7 +53,7 @@ func TestRunSurvivesMissingAgentSocket(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	start := time.Now()
-	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "sh "+original)
+	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "sh "+original, false)
 	elapsed := time.Since(start)
 
 	if code != 0 || stdout.String() != samplePayload {
@@ -71,7 +71,7 @@ func TestRunSurvivesMalformedClaudePayload(t *testing.T) {
 	malformed := "this is not json at all"
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), strings.NewReader(malformed), &stdout, &stderr, "sh "+original)
+	code := Run(context.Background(), strings.NewReader(malformed), &stdout, &stderr, "sh "+original, false)
 
 	if code != 0 || stdout.String() != malformed {
 		t.Fatalf("passthrough broken by malformed payload: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -83,7 +83,7 @@ func TestRunPropagatesOriginalExitCode(t *testing.T) {
 	original := writeFixture(t, "#!/bin/sh\ncat >/dev/null\nexit 7\n")
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "sh "+original)
+	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "sh "+original, false)
 	if code != 7 {
 		t.Fatalf("exit code = %d, want 7", code)
 	}
@@ -92,7 +92,7 @@ func TestRunPropagatesOriginalExitCode(t *testing.T) {
 func TestRunNoOriginalCommandConfigured(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "")
+	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "", false)
 	if code == 0 {
 		t.Fatal("expected a non-zero exit code when no original command is configured")
 	}
@@ -100,6 +100,62 @@ func TestRunNoOriginalCommandConfigured(t *testing.T) {
 		t.Fatalf("expected no stdout, got %q", stdout.String())
 	}
 }
+
+// --- capture-only (install Case B: no pre-existing statusLine) -----------
+
+func TestRunCaptureOnlyEmptyOriginalIsNotAnError(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "", true)
+	if code != 0 {
+		t.Fatalf("captureOnly with no original: exit = %d, want 0 (stderr=%q)", code, stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("captureOnly must produce no output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunCaptureOnlyStillDeliversToAgentSocket(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+
+	l, err := net.Listen("unix", claudesock.Path())
+	if err != nil {
+		t.Fatalf("failed to start fake agent listener: %v", err)
+	}
+	defer l.Close()
+
+	received := make(chan domain.UsageSnapshot, 1)
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var snap domain.UsageSnapshot
+		_ = json.NewDecoder(conn).Decode(&snap)
+		received <- snap
+	}()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), strings.NewReader(samplePayload), &stdout, &stderr, "", true)
+	if code != 0 || stdout.Len() != 0 {
+		t.Fatalf("captureOnly: code=%d stdout=%q", code, stdout.String())
+	}
+
+	select {
+	case snap := <-received:
+		if snap.Provider != domain.ProviderClaude || snap.FiveHour == nil || snap.FiveHour.UsedPercent != 65 {
+			t.Fatalf("unexpected snapshot: %+v", snap)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent never received a snapshot over the socket in captureOnly mode")
+	}
+}
+
+// captureOnly ignoring a non-empty originalCommand isn't a supported/tested
+// combination the installer ever produces (the command generator picks one
+// mode or the other), so it's intentionally not asserted here.
 
 func TestRunDeliversExactlyFourFieldsToAgentSocket(t *testing.T) {
 	dir := t.TempDir()
@@ -136,7 +192,7 @@ func TestRunDeliversExactlyFourFieldsToAgentSocket(t *testing.T) {
 	original := writeFixture(t, "#!/bin/sh\ncat >/dev/null\nprintf 'ok'\n")
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), strings.NewReader(fullPayload), &stdout, &stderr, "sh "+original)
+	code := Run(context.Background(), strings.NewReader(fullPayload), &stdout, &stderr, "sh "+original, false)
 	if code != 0 || stdout.String() != "ok" {
 		t.Fatalf("passthrough broken: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
