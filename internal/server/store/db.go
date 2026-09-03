@@ -74,6 +74,16 @@ func dsn(path string) string {
 	params := url.Values{
 		"_foreign_keys": {"1"},
 		"_busy_timeout": {"5000"},
+		// Every read-modify-write transaction in this package (see
+		// pairing.go, events.go) reads before it writes. SQLite's default
+		// "deferred" transaction only takes a read lock at BEGIN and tries
+		// to upgrade to a write lock on the first write statement; if
+		// another connection committed in between, that upgrade fails with
+		// an immediate SQLITE_BUSY (a stale-snapshot conflict, not a
+		// contended lock), which _busy_timeout's retry-and-wait does not
+		// cover. "immediate" takes the write lock up front, so concurrent
+		// transactions serialize through the busy handler instead.
+		"_txlock": {"immediate"},
 	}
 	if path == ":memory:" {
 		return path + "?" + params.Encode()
