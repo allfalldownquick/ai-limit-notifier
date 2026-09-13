@@ -180,9 +180,9 @@ var windowLabels = map[string]string{
 func providerLabel(p string) string {
 	switch p {
 	case "codex":
-		return "Codex"
+		return "🔵 Codex"
 	case "claude":
-		return "Claude"
+		return "🟠 Claude"
 	default:
 		return p
 	}

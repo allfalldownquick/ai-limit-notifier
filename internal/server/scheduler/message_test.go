@@ -15,7 +15,7 @@ import (
 func TestBuildMessageSingleProviderWording(t *testing.T) {
 	ev := store.NotificationEvent{Provider: "codex", WindowKind: "five_hour"}
 	got := buildMessage(ev, nil)
-	want := "Your Codex 5-hour usage limit should be available again now."
+	want := "Your 🔵 Codex 5-hour usage limit should be available again now."
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -24,7 +24,7 @@ func TestBuildMessageSingleProviderWording(t *testing.T) {
 func TestBuildMessageWeeklyWording(t *testing.T) {
 	ev := store.NotificationEvent{Provider: "claude", WindowKind: "weekly"}
 	got := buildMessage(ev, nil)
-	want := "Your Claude weekly usage limit should be available again now."
+	want := "Your 🟠 Claude weekly usage limit should be available again now."
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -33,7 +33,7 @@ func TestBuildMessageWeeklyWording(t *testing.T) {
 func TestBuildMessageCombinedFiveHourWording(t *testing.T) {
 	ev := store.NotificationEvent{Provider: "claude", WindowKind: "five_hour"}
 	got := buildMessage(ev, []string{"codex"})
-	want := "Your Claude and Codex 5-hour usage limits should be available again now."
+	want := "Your 🟠 Claude and 🔵 Codex 5-hour usage limits should be available again now."
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -42,7 +42,7 @@ func TestBuildMessageCombinedFiveHourWording(t *testing.T) {
 func TestBuildMessageCombinedWeeklyWording(t *testing.T) {
 	ev := store.NotificationEvent{Provider: "codex", WindowKind: "weekly"}
 	got := buildMessage(ev, []string{"claude"})
-	want := "Your Codex and Claude weekly usage limits should be available again now."
+	want := "Your 🔵 Codex and 🟠 Claude weekly usage limits should be available again now."
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
