@@ -111,7 +111,7 @@ func TestTickCombinesMessageForCoveredEvent(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("expected exactly one combined delivery, got %d: %+v", len(sent), sent)
 	}
-	if !strings.Contains(sent[0].Message, "Codex") || !strings.Contains(sent[0].Message, "Claude") {
+	if !strings.Contains(sent[0].Message, "Кодекс") || !strings.Contains(sent[0].Message, "Клод") {
 		t.Fatalf("combined message should name both providers, got %q", sent[0].Message)
 	}
 }
@@ -160,7 +160,7 @@ func TestCombinedNotificationNotResentAfterRestart(t *testing.T) {
 		t.Fatalf("expected exactly one combined delivery, got %d: %+v", len(sent), sent)
 	}
 	t.Logf("rendered combined message: %q", sent[0].Message)
-	if !strings.Contains(sent[0].Message, "Codex") || !strings.Contains(sent[0].Message, "Claude") {
+	if !strings.Contains(sent[0].Message, "Кодекс") || !strings.Contains(sent[0].Message, "Клод") {
 		t.Fatalf("combined message must name both providers, got %q", sent[0].Message)
 	}
 

@@ -304,6 +304,26 @@ func (s *Store) CoveredProviders(ctx context.Context, eventID string) ([]string,
 	return providers, rows.Err()
 }
 
+// PendingWeeklyResetAt returns the reset_at of this user+provider's pending
+// weekly event, if any -- used to add a "resets on <weekday>" hint to a
+// five_hour notification without claiming or otherwise touching that
+// weekly event itself.
+func (s *Store) PendingWeeklyResetAt(ctx context.Context, userID, provider string) (resetAt time.Time, found bool, err error) {
+	var unix int64
+	err = s.db.QueryRowContext(ctx,
+		`SELECT reset_at FROM notification_events
+		 WHERE user_id = ? AND provider = ? AND window_kind = 'weekly' AND status = ?`,
+		userID, provider, EventPending,
+	).Scan(&unix)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return time.Unix(unix, 0).UTC(), true, nil
+}
+
 // ClaimEvent atomically transitions one due event from "pending" (or a
 // stale "sending" — crash recovery) to "sending". claimed is false, with no
 // error, when another concurrent caller won the race first — expected and

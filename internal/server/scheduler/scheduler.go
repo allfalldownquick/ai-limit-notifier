@@ -115,7 +115,19 @@ func (sch *Scheduler) deliverOne(ctx context.Context, ev store.NotificationEvent
 	if err != nil {
 		return
 	}
-	message := buildMessage(ev, coveredProviders)
+
+	// A five_hour notification for a single provider also names the
+	// weekday its weekly limit resets on, if a weekly event is already
+	// pending for that same provider. Skipped for weekly notifications
+	// themselves (redundant) and combined multi-provider messages (which
+	// weekly would it even be about).
+	var weeklyResetAt *time.Time
+	if ev.WindowKind == "five_hour" && len(coveredProviders) == 0 {
+		if t, found, err := sch.Store.PendingWeeklyResetAt(ctx, ev.UserID, ev.Provider); err == nil && found {
+			weeklyResetAt = &t
+		}
+	}
+	message := buildMessage(ev, coveredProviders, weeklyResetAt)
 
 	sendErr := sch.Delivery.Send(ctx, destination, message)
 	if sendErr == nil {
@@ -151,9 +163,13 @@ func backoff(attempts int) time.Duration {
 // buildMessage is deliberately cautious: the server knows the provider's
 // reported reset_at and that send_at (reset_at + 1 minute) has arrived, but
 // it never re-queries the provider afterward to confirm the window actually
-// rolled over. "should be available again now" reflects what was actually
-// verified; "has reset" would overclaim a fact the server never checked.
-func buildMessage(ev store.NotificationEvent, coveredProviders []string) string {
+// rolled over. "доступен" ("available") reflects what was actually
+// verified; claiming the window "сброшен" ("has reset") would overclaim a
+// fact the server never checked.
+//
+// weeklyResetAt, when non-nil, adds a "(Недельный <weekday>)" hint — see
+// deliverOne for when that's populated.
+func buildMessage(ev store.NotificationEvent, coveredProviders []string, weeklyResetAt *time.Time) string {
 	windowLabel := windowLabels[ev.WindowKind]
 	if windowLabel == "" {
 		windowLabel = ev.WindowKind
@@ -165,24 +181,42 @@ func buildMessage(ev store.NotificationEvent, coveredProviders []string) string 
 		names = append(names, providerLabel(p))
 	}
 
-	verb := "limit should be available again now"
+	verb := "доступен"
 	if len(names) > 1 {
-		verb = "limits should be available again now"
+		verb = "доступны"
 	}
-	return fmt.Sprintf("Your %s %s usage %s.", strings.Join(names, " and "), windowLabel, verb)
+
+	msg := fmt.Sprintf("%s %s %s", strings.Join(names, " и "), windowLabel, verb)
+	// Guarded here, not just by the caller: a weekly notification is
+	// itself the weekly hint, so repeating it would be redundant no
+	// matter what a future caller passes in.
+	if weeklyResetAt != nil && ev.WindowKind != "weekly" {
+		msg += fmt.Sprintf(" (%s %s)", windowLabels["weekly"], weekdayRU(*weeklyResetAt))
+	}
+	return msg
 }
 
 var windowLabels = map[string]string{
-	"five_hour": "5-hour",
-	"weekly":    "weekly",
+	"five_hour": "5 час.",
+	"weekly":    "Недельный",
 }
+
+// weekdayRU converts to Moscow time (UTC+3, fixed -- Russia has not
+// observed DST since 2014, so no tzdata/location lookup is needed) and
+// returns the short Russian weekday name.
+func weekdayRU(t time.Time) string {
+	names := [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"}
+	return names[t.In(moscow).Weekday()]
+}
+
+var moscow = time.FixedZone("MSK", 3*60*60)
 
 func providerLabel(p string) string {
 	switch p {
 	case "codex":
-		return "🔵 Codex"
+		return "🔵 Кодекс"
 	case "claude":
-		return "🟠 Claude"
+		return "🟠 Клод"
 	default:
 		return p
 	}
